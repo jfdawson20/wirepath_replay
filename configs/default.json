@@ -1,0 +1,36 @@
+{
+    "core_config" : 
+    {
+        "total_lcores"    : 4,
+        "tx_cores"        : 1,
+        "base_lcore_id"   : 0,
+        "limit_buf_cores" : 1
+    },
+    "memory_configs":
+    {
+        "default_hugepage_size" : "1G",
+        "num_pages" : 24
+    },
+    "port_configs": [
+        {
+            "portid"    : 0,
+            "portnetd"  : "enp1s0f0np0",
+            "pf_devid"  : "0000:01:00.0",
+            "numvfs"    : 2,
+            "vf_devids" : [
+                "0000:01:00.2",
+                "0000:01:00.3"
+            ],
+            "vlan_append" : false,
+            "vlan_ids"    : [
+                100
+            ],
+            "default_speed" : 10000
+        }
+    ],
+    "dpdk_config" :
+    {
+        "appname" : "pcap_replay_dataplane",
+        "path"    : "build/src"
+    }
+}
