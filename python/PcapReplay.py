@@ -46,6 +46,7 @@ class PcapReplay():
             {"command" : "port_stats",              "help" : "Get Portstats",                                   "func" : self.get_portstats},
             {"command" : "mem_stats",               "help" : "Get memory stats",                                "func" : self.get_memstats},
             {"command" : "load_pcap",               "help" : "load pcap file single",                           "func" : self.load_pcap_file_single},
+            {"command" : "load_pcap_bulk",          "help" : "load pcap files from directory",                  "func" : self.load_pcap_file_bulk},
             {"command" : "list_pcaps",              "help" : "list pcaps loaded into datapath",                 "func" : self.list_pcap_files},
             {"command" : "list_coremap",            "help" : "Get Tx to Buff core mapping",                     "func" : self.get_coremap},
             {"command" : "tx_enable",               "help" : "Enable transmission on all or a single port",     "func" : self.tx_enable},
@@ -435,6 +436,34 @@ class PcapReplay():
                 print("Error slot ID not expected, greater than slot manager list size")
 
         return ret
+
+    def load_pcap_file_bulk(self,args=[]):
+        """ Load all pcap files in a directory into memory """
+        try: 
+            #check arg length
+            if len(args) != 1:
+                print("Incorrect arguments: expected pcapdir:</path/to/pcap_directory>")
+                return -1
+
+            cmd_tokens = args[0].strip().split(":")
+            if (len(cmd_tokens) != 2) or (cmd_tokens[0] != "pcapdir"):
+                print("Invalid command: %s, expected pcapdir:</path/to/pcap_directory>" % args[0])
+                return -1
+        except Exception as e: 
+            print("Invalid command: %s, expected pcapdir:</path/to/pcap_directory>" % args[0])
+            return -1
+
+        pcap_path = Path(cmd_tokens[1])
+        pcap_files = list(pcap_path.glob("*.pcap"))
+        for pcap in pcap_files:
+            args = ["filepath:%s" % str(pcap)]
+            ret = self.load_pcap_file_single(args)
+            if ret[0] != 0:
+                print("failed to load pcap %s" % str(pcap))
+            else:
+                print("loaded pcap %s into slot %d with %d packets" % (str(pcap), ret[1]["slot"], ret[1]["num_packets"]))
+
+        return True
     
     #list pcaps that are already loaded into memory
     def list_pcap_files(self,args=[]):
@@ -594,7 +623,7 @@ class PcapReplay():
         for entries in self.slot_manager:
             #find the right slot entries
             if "/" in entries["pcap_name"]:
-                if (pcap_name) == entries["pcap_name"].split("/")[1]:
+                if (pcap_name) == entries["pcap_name"].split("/")[len(entries["pcap_name"].split("/")) - 1]:
                     slotid = entries["slotid"] 
             else: 
                 if (pcap_name) == entries["pcap_name"]:

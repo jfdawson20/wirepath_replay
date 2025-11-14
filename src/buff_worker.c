@@ -605,8 +605,10 @@ int buffer_worker(__rte_unused void *arg) {
             }
 
             //if port slot doesn't have a pcap slot assigned, or port not enabled skip so we can start to proces the next port in the series (if configured)
-            if(slot_assignment[i] == -1 || port_enabled[i] == 0)
+            if(slot_assignment[i] == -1 || port_enabled[i] == 0){
+                rte_pause();
                 continue;
+            }
 
             //get pcap slot pointer 
             pcap_buffer[i] = buff_args->global_state->pcap_storage_t->slots[slot_assignment[i]];

@@ -16,12 +16,21 @@
             "portid"    : 0,
             "portnetd"  : "enp1s0f0np0",
             "pf_devid"  : "0000:01:00.0",
-            "numvfs"    : 2,
+            "numvfs"    : 1,
             "vf_devids" : [
-                "0000:01:00.2",
-                "0000:01:00.3"
+                "0000:01:00.2"
+            ]
+        },
+        {
+            "portid"    : 1,
+            "portnetd"  : "enp1s0f1np1",
+            "pf_devid"  : "0000:01:00.1",
+            "numvfs"    : 1,
+            "vf_devids" : [
+                "0000:01:01.2"
             ]
         }
+
     ],
     "dpdk_config" :
     {
