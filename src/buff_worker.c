@@ -579,7 +579,12 @@ int buffer_worker(__rte_unused void *arg) {
                 for(int j =0;j < buff_args->virt_ip_cnt;j++){
                     buff_args->virtual_flows[i][j].tx_pkt_index = 0; 
                     buff_args->virtual_flows[i][j].running = false;
-                    buff_args->virtual_flows[i][j].offset_ns = rand_u64_uniform(buff_args->global_state->pcap_storage_t->slots[slot_assignment[i]].delta_ns);
+                    if (j == 0){
+                        buff_args->virtual_flows[i][j].offset_ns = 0;
+                    }
+                    else{
+                        buff_args->virtual_flows[i][j].offset_ns = rand_u64_uniform(buff_args->global_state->pcap_storage_t->slots[slot_assignment[i]].delta_ns);
+                    }
                 }
             }
 
