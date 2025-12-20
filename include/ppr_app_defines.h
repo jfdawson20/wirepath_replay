@@ -41,6 +41,7 @@ typedef struct ppr_acl_runtime          ppr_acl_runtime_t;
 typedef struct ppr_rcu_ctx              ppr_rcu_ctx_t;
 typedef struct ppr_ports                ppr_ports_t; 
 typedef struct ppr_stats_all            ppr_stats_all_t;
+typedef struct pcap_loader_ctl          pcap_loader_ctl_t;
 
 //struct for passing shared memory and arguments to pthreads (for control and stats threads)
 struct pthread_args {
@@ -98,6 +99,7 @@ typedef struct {
     //stats & control structs
     ppr_ports_t             *global_port_list;
     ppr_stats_all_t         *global_stats;
+    pcap_loader_ctl_t       *pcap_controller;
     //mempool pointers
 
     //QSBR Context

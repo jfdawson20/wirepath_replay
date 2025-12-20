@@ -209,27 +209,7 @@ static int return_pcap_list(json_t *root, struct pthread_args *thread_args, json
     return 0;
 }
 
-/* 
-The next two functions (check_pcap_status) and (return_pcap_loader) are responsible for taking a pcapfile path and loading it into the
-Pcap Replay pcap storage memory.  
-*/
 
-/* check for pcap loading complete - polls pcap thread control structure 
-   returns 0 if busy and 1 if done. slot ID loaded and result (error) returned in pointers 
-*/
-static int check_pcap_status(struct pthread_args *thread_args, int *result, unsigned int *slot){
-    int done = 0;
-    
-    pthread_mutex_lock(&thread_args->pcap_controller->lock);
-    if (!thread_args->pcap_controller->busy && thread_args->pcap_controller->command == CMD_NONE) {
-        // worker finished last command
-        *result = thread_args->pcap_controller->result;
-        *slot   = thread_args->pcap_controller->latest_slotid;
-        done = 1;
-    }
-    pthread_mutex_unlock(&thread_args->pcap_controller->lock);
-    return done;
-}
 
 /* Primary pcap load command handler. This function takes a filename and a assigned tx core ID 
    from the command args json struct and uses the information to kick the pcap_loader pthread. 
@@ -294,76 +274,7 @@ static int return_pcap_loader(json_t *root, struct pthread_args *thread_args, js
     return 0; 
 }
 
-/* jsonize and return all configured memory pool stats. memory pool stats are periodically collected / computed from a separate statistics pthread  
-this function just grabs the latest copy of each mempool stats struct and returns it in json format. There is always N tx cores + 1 memory pools, 
-one for each port and then the master / template memory pool. */
-static int return_mem_stats(json_t *root, struct pthread_args *thread_args){
-    pthread_mutex_lock(&(thread_args->global_stats->mem_stats->lock));
 
-    json_t *arr = json_array();
-    json_t *mem_info = json_object();
-    char name[32];
-    sprintf(name,"template_pcap_pool");
-
-    json_object_set_new(mem_info, "pool_name", json_string(name));
-    json_object_set_new(mem_info, "mem_available", json_integer(thread_args->global_stats->mem_stats->mstats[0].available));
-    json_object_set_new(mem_info, "mem_used", json_integer(thread_args->global_stats->mem_stats->mstats[0].used));
-    json_object_set_new(mem_info, "mem_total", json_integer(thread_args->global_stats->mem_stats->mstats[0].total));
-    json_array_append_new(arr,mem_info);
-
-    for(int i=0;i<thread_args->global_state->num_tx_cores;i++){
-        json_t *mem_info = json_object();
-        char name[32];
-        sprintf(name,"tx_core_%d_clonepool",i);
-
-        json_object_set_new(mem_info, "pool_name", json_string(name));
-        json_object_set_new(mem_info, "mem_available", json_integer(thread_args->global_stats->mem_stats->mstats[i+1].available));
-        json_object_set_new(mem_info, "mem_used", json_integer(thread_args->global_stats->mem_stats->mstats[i+1].used));
-        json_object_set_new(mem_info, "mem_total", json_integer(thread_args->global_stats->mem_stats->mstats[i+1].total));
-        json_array_append_new(arr,mem_info);        
-    }
-
-    json_object_set_new(root,"mempool_info",arr);
-    pthread_mutex_unlock(&(thread_args->global_stats->mem_stats->lock));
-    return 0;
-}
-
-/* jsonize and return all configured port stats. Port stats are periodically collected / computed from a separate statistics pthread  
-this function just grabs the latest copy of each port stats struct. The stats thread reads DPDK xstats per port and also computes rates based on 
-a preconfigured poll frequency. 
-*/
-static int return_port_stats(json_t *root, struct pthread_args *thread_args){
-    //claim portstats lock 
-    pthread_mutex_lock(&(thread_args->global_stats->port_stats->lock));
-
-    char portname[30];
-    //iterate across ports and grab latest stats, format into json struct
-    for(int i=0; i<thread_args->global_stats->port_stats->num_ports; i++){
-        sprintf(portname, "port%d",i);
-        json_t *portstats = json_object();
-        
-        //iterate over all xstats for the port
-        for (int j = 0; j < thread_args->global_stats->port_stats->per_port_stats[i].n_xstats;j++){
-            json_object_set_new(portstats,thread_args->global_stats->port_stats->per_port_stats[i].port_stats_names[j].name,
-                json_integer(thread_args->global_stats->port_stats->per_port_stats[i].current_port_stats[j].value));
-        }
-
-        //add all rate metrics 
-        for (int j = 0; j < thread_args->global_stats->port_stats->per_port_stats[i].n_xstats;j++){
-            char name[128]; 
-            sprintf(name, "%s_rate", thread_args->global_stats->port_stats->per_port_stats[i].port_stats_names[j].name);
-
-            json_object_set_new(portstats,name,json_integer(thread_args->global_stats->port_stats->per_port_stats[i].rates_port_stats[j].value));
-        }
-
-        json_object_set_new(root,portname,portstats);
-
-    }
-    //release portstats lock
-    pthread_mutex_unlock(&(thread_args->global_stats->port_stats->lock));    
-
-    return 0;
-}
 
 /* Return json formated global state information. This was the first return function I wrote and was for initial testing purposes. Will extend this
    to include more port state in the future */
