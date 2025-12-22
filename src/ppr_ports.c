@@ -142,6 +142,8 @@ int ppr_portlist_add(ppr_ports_t *port_list, const char * name, uint16_t port_id
         port_list->ports[port_list->num_ports].tx_queue_assignments[i] = UINT16_MAX; //initialize to invalid
     }
 
+    atomic_store_explicit(&port_list->ports[port_list->num_ports].tx_enabled, false, memory_order_release);
+
     port_list->ports[port_list->num_ports].name             = strdup(name);
     port_list->ports[port_list->num_ports].port_id          = port_id;
     port_list->ports[port_list->num_ports].total_rx_queues  = total_rx_queues;

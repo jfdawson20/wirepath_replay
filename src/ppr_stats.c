@@ -44,7 +44,8 @@ static inline uint64_t safe_diff_u64(uint64_t cur, uint64_t prev)
    stats memory structures 
 */
 static int update_memstats(ppr_thread_args_t *thread_args){
-    ppr_stats_all_t *stats_memory = thread_args->global_stats;
+    (void)thread_args;
+    //ppr_stats_all_t *stats_memory = thread_args->global_stats;
 
     
     return 0;
@@ -53,7 +54,7 @@ static int update_memstats(ppr_thread_args_t *thread_args){
 /* Collect port statistics and compute rates. Function gathers DPDK xstats and computes the rate for each statistic based on the poll frequency */
 static int update_portstats(ppr_thread_args_t *thread_args){
     ppr_ports_t *global_port_list = thread_args->global_port_list;
-    unsigned int num_workers = 0;
+
     int rc =0;
     for (unsigned int i =0; i < global_port_list->num_ports; i++){
         if(!global_port_list->ports[i].name){
@@ -191,6 +192,7 @@ void *run_ppr_stats_thread(void *arg) {
     ppr_thread_args_t *thread_args  = (ppr_thread_args_t *)arg;   
     ppr_ports_t *global_port_list = thread_args->global_port_list;
     int rc = 0; 
+
     //setup poll rate variables
     const uint64_t hz = rte_get_timer_hz();
     uint64_t t0 = rte_get_timer_cycles();

@@ -15,6 +15,7 @@ Description: header file for pcap_loader code and data types
 #include <stdbool.h>
 #include <stdint.h>
 
+#define PPR_MAX_PCAP_SLOTS 256
 
 typedef enum pcap_cmd {
     CMD_NONE,
@@ -45,9 +46,11 @@ typedef struct pcap_loader_ctl {
 
 
 typedef struct mbuf_array {
-    struct rte_mbuf **pkts;   // array of mbuf pointers
-    size_t count;             // how many are used
-    size_t capacity;          // how many allocated
+    struct rte_mbuf **pkts;               // array of mbuf pointers
+    size_t count;                         // how many are used
+    size_t capacity;                      // how many allocated
+    const uint32_t *cap_ts_us;            // relative timestamps (optional)
+    const uint16_t *action_id;            // classification result per template pkt
 } mbuf_array_t;
 
 //pcap mbuff slot contains a mbuf array 
@@ -64,25 +67,14 @@ typedef struct pcap_mbuff_slot {
 } pcap_mbuff_slot_t;
 
 
+
 typedef struct pcap_storage {
-    pcap_mbuff_slot_t *slots;  // dynamic array of slots
-    size_t count;                   // number of slots currently in use
-    size_t capacity;                // allocated size of slots array
-    unsigned int **slot_assignments;  // which slot is assigned to which output port and by tx core
+    _Atomic(struct pcap_mbuff_slot*) slots[PPR_MAX_PCAP_SLOTS];
+    _Atomic uint32_t published_count;
+    unsigned int **slot_assignments; // keep if you want, but don't realloc it live
 } pcap_storage_t;
 
 
-
-
-//struct for dynamic client flow expansion
-typedef struct virtual_flow { 
-    uint32_t                vert_flow_index;
-    uint64_t                offset_ns;         //when to start in reference to a comment start signal
-    int64_t                 start_time_ns;         //when to start in reference to a comment start signal
-    int64_t                 cur_time_ns;         //when to start in reference to a comment start signal
-    bool                    running;
-    unsigned int            tx_pkt_index;      //index of last transmitted packet
-} virtual_flow_t;
 
 void *run_pcap_loader_thread(void *arg);
 

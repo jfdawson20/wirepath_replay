@@ -15,10 +15,6 @@ Description: header file containing app wide constants and structs
 #include <signal.h>
 #include <stdatomic.h>   
 
-
-#define RX_RING_SIZE 1024
-#define TX_RING_SIZE 1024
-
 //pcap mbuf 
 #define NUM_MBUFS 1000000
 #define MBUF_CACHE_SIZE 256
@@ -28,62 +24,18 @@ Description: header file containing app wide constants and structs
 #define NUM_CLONE_MBUFS 8192
 #define CLONE_MBUF_CACHE_SIZE 256
 
-//interconnect ring properties
-#define RING_BURST 128
-#define RXTX_RING_SIZE (1u << 14) 
-
+#define MAX_PORTS 8 
 
 /* Forward declarations for types only used via pointer in this header */
 typedef struct ppr_global_policy_epoch  ppr_global_policy_epoch_t;   
-typedef struct ppr_flow_table           ppr_flow_table_t;
 typedef struct ppr_acl_rule_db          ppr_acl_rule_db_t;
 typedef struct ppr_acl_runtime          ppr_acl_runtime_t;
 typedef struct ppr_rcu_ctx              ppr_rcu_ctx_t;
 typedef struct ppr_ports                ppr_ports_t; 
 typedef struct ppr_stats_all            ppr_stats_all_t;
 typedef struct pcap_loader_ctl          pcap_loader_ctl_t;
-
-//struct for passing shared memory and arguments to pthreads (for control and stats threads)
-struct pthread_args {
-    struct psmith_stats_all  *global_stats; 
-    struct psmith_app_state  *global_state;
-    struct flow_table        *global_flowtable;  
-    struct pcap_loader_ctl   *pcap_controller;
-    struct ft_manager_ctl    *ft_controller;
-
-    void *private_args; 
-};
-
-//structs for passing shared memory and arguments to DPDK lcores
-struct tx_worker_args {
-    unsigned int             tx_thread_index;
-    struct psmith_stats_all  *global_stats; 
-    struct psmith_app_state  *global_state;  
-    struct flow_table        *global_flowtable;  
-    struct rte_mempool       *clone_mpool;
-    unsigned int             num_ports;         //how many ports are configured?
-    unsigned int             *num_buffer_rings; //array, how many input rings per port? 
-    struct rte_ring          ***buffer_rings;    
-    struct core_mapping      *core_map;
-};
-
-struct buff_worker_args {
-    unsigned int             buff_thread_index; //index starting at 0 to id the thread
-    struct psmith_stats_all  *global_stats; 
-    struct psmith_app_state  *global_state;  
-    struct flow_table        *global_flowtable;  
-    struct pcap_loader_ctl   *pcap_controller;
-    struct rte_mempool       *clone_mpool;
-    unsigned int             linked_tx_core;
-    unsigned int             num_ports;
-    struct rte_ring          **buffer_rings;    //buffer workers just have a list of rings, 1x ring per configured port,
-
-    //parameters for handling virtual flow generation 
-    uint64_t tsc_hz; 
-    uint32_t vert_ip_offset;
-    uint32_t virt_ip_cnt;
-    struct virtual_flow    **virtual_flows; //array of virt flow pointers, 1x array per port
-};
+typedef struct pcap_storage             pcap_storage_t;
+typedef struct ppr_tx_worker_ctx        ppr_tx_worker_ctx_t;
 
 
 /* per thread struct with globals */
@@ -98,9 +50,7 @@ typedef struct ppr_thread_args{
     _Atomic  bool           thread_ready;    //written by thread, read by main, one per thread
 
     //traffic gen control/status
-    unsigned int            *port_status;
-    volatile unsigned int   *port_enable;
-    volatile unsigned int   *virt_channels_per_port;
+    ppr_tx_worker_ctx_t      *tx_worker_ctx;
     int                      mbuf_ts_off;
 
 
@@ -111,7 +61,9 @@ typedef struct ppr_thread_args{
 
     //pcap loader interface
     pcap_loader_ctl_t       *pcap_controller;
-    struct pcap_storage     *pcap_storage_t; 
+
+    pcap_storage_t          *pcap_storage;
+    _Atomic uint32_t        *storage_epoch;   
 
     //mempool pointers
     struct rte_mempool      *pcap_template_mpool;
@@ -119,10 +71,6 @@ typedef struct ppr_thread_args{
 
     //QSBR Context
     ppr_rcu_ctx_t              *rcu_ctx;
-    
-    //lookup tables 
-    ppr_flow_table_t            *ip_flowtable;
-    ppr_flow_table_t            *l2_flowtable;
 
     //acl rules interface 
     ppr_acl_rule_db_t            *acl_rule_db;
@@ -146,6 +94,6 @@ struct core_mapping {
 extern _Atomic int wps_fatal_error;
 extern volatile sig_atomic_t force_quit;
 
-void wps_fatal(const char *fmt, ...);
+void ppr_fatal(const char *fmt, ...);
 
 #endif 

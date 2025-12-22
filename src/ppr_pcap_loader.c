@@ -2,28 +2,38 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
-Filename: pcap_loader.c 
-Description: Primary entry point and supporting code for the pcap_loader pthread. The pcap loader thread 
-is launched by the main DPDK application and waits for commands to be received via a shared memory 
-pcap_loader_ctl struct. When signaled to start, the pcap loader thread calls pcap processing functions 
-to load the pcap file into a dynamically sized pcap storage array indexed by slotid. After loading pcap files into 
-pcap file storage, other threads (the control server mostly) can assign pcap slot id's to each tx core / buffer thread groups 
-for transmission. 
+Filename: pcap_loader.c
+Description:
+  Pcap loader pthread. Loads PCAP files into a template mbuf array and publishes
+  completed PCAP "slots" to a fixed-size global slot table using atomic pointer
+  publication. This allows readers (tx workers) to safely access loaded pcaps
+  concurrently without races from realloc().
+
+  Concurrency model:
+    - Loader builds slot privately (including mbuf array growth via realloc()).
+    - After build is complete and immutable, loader publishes slot pointer with
+      atomic_store_release().
+    - Readers obtain slot pointers with atomic_load_acquire().
+    - Slots are never deleted during runtime; freed only at shutdown.
+
+  Max slots: 256
 */
 
-#include <pcap/pcap.h>             
+#include <pcap/pcap.h>
 #include <rte_config.h>
 #include <rte_mempool.h>
-#include <rte_mbuf_dyn.h>   // if your version has it
+#include <rte_mbuf_dyn.h>
 #include <rte_mbuf.h>
-#include <rte_ring.h>
 #include <rte_errno.h>
 #include <rte_byteorder.h>
 #include <rte_log.h>
+
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 
 #include "ppr_pcap_loader.h"
 #include "ppr_app_defines.h"
@@ -31,18 +41,19 @@ for transmission.
 #include "ppr_control.h"
 
 
-/* ------------------------------- dynamic mbuff array functions --------------------------*/
-//init a dynamically resizing mbuff array struct 
+/* ------------------------------- dynamic mbuf array functions -------------------------- */
+
 static void mbuf_array_init(struct mbuf_array *arr) {
     arr->pkts = NULL;
     arr->count = 0;
     arr->capacity = 0;
+    arr->cap_ts_us = NULL;
+    arr->action_id = NULL;
 }
 
-//add an mbuff to an array and resize if needed
 static void mbuf_array_push(struct mbuf_array *arr, struct rte_mbuf *m) {
     if (arr->count == arr->capacity) {
-        size_t newcap = (arr->capacity == 0) ? 16 : arr->capacity * 2;
+        size_t newcap = (arr->capacity == 0) ? 1024 : arr->capacity * 2;
         struct rte_mbuf **newpkts = realloc(arr->pkts, newcap * sizeof(*newpkts));
         if (!newpkts) {
             perror("realloc failed");
@@ -54,8 +65,8 @@ static void mbuf_array_push(struct mbuf_array *arr, struct rte_mbuf *m) {
     arr->pkts[arr->count++] = m;
 }
 
-//free mbuff array
 static void mbuf_array_free(struct mbuf_array *arr) {
+    if (!arr) return;
     for (size_t i = 0; i < arr->count; i++) {
         if (arr->pkts[i])
             rte_pktmbuf_free(arr->pkts[i]);
@@ -64,83 +75,87 @@ static void mbuf_array_free(struct mbuf_array *arr) {
     arr->pkts = NULL;
     arr->count = 0;
     arr->capacity = 0;
+
+    /* If you later allocate these arrays, free them here too */
+    free((void*)arr->cap_ts_us);
+    free((void*)arr->action_id);
+    arr->cap_ts_us = NULL;
+    arr->action_id = NULL;
 }
 
-/* ------------------------------- dynamic pcap storage array functions --------------------------*/
-//Initialize pcap storage struct
+/* ------------------------------- pcap storage functions (fixed slots + atomic publish) -------------------------- */
+
 static void pcap_storage_init(struct pcap_storage *st) {
-    st->slots = NULL;
-    st->count = 0;
-    st->capacity = 0;
-}
-
-//add a new mbuff array (parsed pcap) to the storage structure 
-static void pcap_storage_add(struct pcap_storage *st, 
-    struct mbuf_array *mbuffs, 
-    unsigned int numpackets, 
-    const char *pcap_name, 
-    unsigned int *slot,
-    uint64_t start_ns, 
-    uint64_t end_ns,
-    uint64_t total_bytes) {
-
-    if (st->count == st->capacity) {
-        size_t newcap = (st->capacity == 0) ? 4 : st->capacity * 2;
-        struct pcap_mbuff_slot *newslots = realloc(st->slots, newcap * sizeof(struct pcap_mbuff_slot));
-        if (!newslots) {
-            perror("realloc");
-            exit(EXIT_FAILURE);
-        }
-        st->slots = newslots;
-        st->capacity = newcap;
+    if (!st) return;
+    for (unsigned i = 0; i < PPR_MAX_PCAP_SLOTS; i++) {
+        atomic_store_explicit(&st->slots[i], NULL, memory_order_relaxed);
     }
-
-    //populate pcap struct
-    snprintf(st->slots[st->count].pcap_name, sizeof(st->slots[st->count].pcap_name), "%s", pcap_name);
-    st->slots[st->count].numpackets = numpackets;
-    st->slots[st->count].mbuf_array = mbuffs;
-    st->slots[st->count].start_ns = start_ns;
-    st->slots[st->count].end_ns = end_ns;
-    st->slots[st->count].delta_ns = end_ns-start_ns;
-    st->slots[st->count].size_in_bytes = total_bytes;
-    st->slots[st->count].mode = UNASSIGNED;
-
-    *slot = st->count;
-
-    st->count++;
+    atomic_store_explicit(&st->published_count, 0, memory_order_relaxed);
 }
 
-//free pcap storage array 
+/* Allocate a new slot id (monotonic). Returns 0 on success, -ENOSPC if full. */
+static int pcap_storage_alloc_slotid(struct pcap_storage *st, unsigned int *slotid_out) {
+    if (!st || !slotid_out) return -EINVAL;
+
+    uint32_t id = atomic_fetch_add_explicit(&st->published_count, 1, memory_order_relaxed);
+    if (id >= PPR_MAX_PCAP_SLOTS) {
+        /* roll back (best-effort). If multiple threads allocate, you might not want rollback;
+           here only loader allocates so rollback is safe-ish. */
+        atomic_fetch_sub_explicit(&st->published_count, 1, memory_order_relaxed);
+        return -ENOSPC;
+    }
+    *slotid_out = (unsigned int)id;
+    return 0;
+}
+
+/* Publish a fully constructed slot pointer. Must be immutable after publish. */
+static inline void pcap_storage_publish_slot(struct pcap_storage *st,
+                                            unsigned int slotid,
+                                            struct pcap_mbuff_slot *slot)
+{
+    /* One-way publish. Readers use acquire. */
+    atomic_store_explicit(&st->slots[slotid], slot, memory_order_release);
+}
+
+/* Free all published slots at shutdown (no concurrent readers). */
 static void pcap_storage_free(struct pcap_storage *st) {
-    for (size_t i = 0; i < st->count; i++) {
-        struct pcap_mbuff_slot *slot = &st->slots[i];
-        mbuf_array_free(slot->mbuf_array);
-        //free packet array
-        free(slot->mbuf_array);
+    if (!st) return;
+
+    uint32_t max = atomic_load_explicit(&st->published_count, memory_order_relaxed);
+    if (max > PPR_MAX_PCAP_SLOTS) max = PPR_MAX_PCAP_SLOTS;
+
+    for (uint32_t i = 0; i < max; i++) {
+        struct pcap_mbuff_slot *slot =
+            atomic_load_explicit(&st->slots[i], memory_order_relaxed);
+        if (!slot) continue;
+
+        if (slot->mbuf_array) {
+            mbuf_array_free(slot->mbuf_array);
+            free(slot->mbuf_array);
+            slot->mbuf_array = NULL;
+        }
+        free(slot);
+
+        atomic_store_explicit(&st->slots[i], NULL, memory_order_relaxed);
     }
-    free(st->slots); 
-    st->slots = NULL;
-    st->count = 0;
-    st->capacity = 0;
+    atomic_store_explicit(&st->published_count, 0, memory_order_relaxed);
 }
 
-/* -------------------------------------------- Primary Pcap Loading / Processing Functions -----------------------------------*/
+/* -------------------------------------------- Primary Pcap Loading / Processing Functions ----------------------------------- */
 
-//function to copy raw packet bytes into mbuffs, handles cases where packet must be split across chained mbuffs (jumbo's)
-static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf, struct rte_mempool *mp, const uint8_t *src, uint32_t len)
+static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf,
+                                      struct rte_mempool *mp,
+                                      const uint8_t *src,
+                                      uint32_t len)
 {
     struct rte_mbuf *m = *pmbuf;
     uint32_t remaining = len;
 
-    //while we still have bytes to process from the pcap packet
     while (remaining) {
-
-        // How many bytes fit in the current last segment?
         struct rte_mbuf *last = rte_pktmbuf_lastseg(m);
         uint32_t tailroom = rte_pktmbuf_tailroom(last);
 
         if (tailroom == 0) {
-            // Need a new segment
             struct rte_mbuf *seg = rte_pktmbuf_alloc(mp);
             if (!seg) return -ENOMEM;
             seg->next = NULL;
@@ -163,151 +178,166 @@ static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf, struct rte_mempo
 }
 
 static uint64_t ts_to_ns(const struct pcap_pkthdr *h, int prec) {
-    // prec is PCAP_TSTAMP_PRECISION_MICRO or PCAP_TSTAMP_PRECISION_NANO
     uint64_t sec_ns = (uint64_t)h->ts.tv_sec * 1000000000ull;
     uint64_t sub    = (prec == PCAP_TSTAMP_PRECISION_NANO)
-                        ? (uint64_t)h->ts.tv_usec               // tv_usec holds ns in nano mode
-                        : (uint64_t)h->ts.tv_usec * 1000ull;    // micro -> nano
+                        ? (uint64_t)h->ts.tv_usec               /* tv_usec holds ns in nano mode */
+                        : (uint64_t)h->ts.tv_usec * 1000ull;    /* micro -> nano */
     return sec_ns + sub;
 }
 
+/*
+ * Build a new slot privately and publish it.
+ * - Allocates mbuf_array and slot struct
+ * - Reads PCAP, fills mbufs
+ * - Publishes slot pointer atomically when complete
+ */
+static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
+    if (!thread_args || !filename) return -EINVAL;
 
-//main pcap processing function, takes a filename and core assignment and perform the read and conversion into mbuf's 
-static int process_pcap(struct pthread_args *thread_args, const char *filename){
-    const uint8_t *data;
-    struct pcap_pkthdr *hdr;
+    const uint8_t *data = NULL;
+    struct pcap_pkthdr *hdr = NULL;
     int rc;
+
     uint64_t first_ns = 0, last_ns = 0;
-    uint64_t total_bytes =0; 
+    uint64_t total_bytes = 0;
 
-    //all pcaps stored in mbuffs from the pcap template mempool
-    struct rte_mempool *mp = thread_args->global_state->pcap_template_mpool; 
+    struct rte_mempool *mp = thread_args->pcap_template_mpool;
+    struct pcap_storage *st = thread_args->pcap_storage;
 
-    //init dynamically resizeable array
-    struct mbuf_array *mbuff_array = calloc(1, sizeof(struct mbuf_array));
+    /* Allocate slot id up front (monotonic). */
+    unsigned int slotid = 0;
+    int s_rc = pcap_storage_alloc_slotid(st, &slotid);
+    if (s_rc != 0) {
+        fprintf(stderr, "pcap_storage full (max=%u)\n", PPR_MAX_PCAP_SLOTS);
+        return s_rc;
+    }
+
+    /* Build mbuf array privately */
+    struct mbuf_array *mbuff_array = calloc(1, sizeof(*mbuff_array));
+    if (!mbuff_array) return -ENOMEM;
     mbuf_array_init(mbuff_array);
-    
 
-    //open file with libpcap
-    char errbuf[PCAP_ERRBUF_SIZE] = {0}; 
-    // Try to open with nanosecond precision; fall back to default (microseconds)
+    /* Open PCAP */
+    char errbuf[PCAP_ERRBUF_SIZE] = {0};
     pcap_t *pc = pcap_open_offline_with_tstamp_precision(filename, PCAP_TSTAMP_PRECISION_NANO, errbuf);
     if (!pc) {
         pc = pcap_open_offline(filename, errbuf);
-        if (!pc) { fprintf(stderr, "pcap open failed: %s\n", errbuf); return 1; }
+        if (!pc) {
+            fprintf(stderr, "pcap open failed: %s\n", errbuf);
+            free(mbuff_array);
+            return -EINVAL;
+        }
     }
-    //get actual precision
-    int prec = pcap_get_tstamp_precision(pc); // MICRO or NANO
+    int prec = pcap_get_tstamp_precision(pc);
 
-
-    //check and enforce ethernet only
+    /* Enforce Ethernet */
     int dlt = pcap_datalink(pc);
     if (dlt != DLT_EN10MB) {
         fprintf(stderr, "Unsupported link type (DLT=%d). Expected DLT_EN10MB.\n", dlt);
         pcap_close(pc);
+        mbuf_array_free(mbuff_array);
+        free(mbuff_array);
         return -ENOTSUP;
     }
 
     bool have_first = false;
-    //while we still have pcap frames to process
+
     while ((rc = pcap_next_ex(pc, &hdr, &data)) >= 0) {
-        if (rc == 0) continue; // timeout (pcapng live only; with files usually not seen)
-        
-        //keep track of time in ns
+        if (rc == 0) continue;
+
         uint64_t ns = ts_to_ns(hdr, prec);
-        if (!have_first) { 
-            first_ns = ns; 
-            have_first = true; 
+        if (!have_first) {
+            first_ns = ns;
+            have_first = true;
         }
-        last_ns = ns;   // "last in file"
+        last_ns = ns;
 
-        const uint32_t caplen = hdr->caplen; // bytes captured
-        total_bytes = total_bytes + caplen;
-        // const uint32_t plen = hdr->len;   // original length on wire (can differ)
+        const uint32_t caplen = hdr->caplen;
+        total_bytes += caplen;
 
-        //create a mbuff to hold the pcap
         struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
         if (!m) {
             fprintf(stderr, "mbuf alloc failed (rte_errno=%d)\n", rte_errno);
             pcap_close(pc);
+            mbuf_array_free(mbuff_array);
+            free(mbuff_array);
             return -ENOMEM;
         }
 
-        //init mbuff header
         m->data_len = 0;
         m->pkt_len  = 0;
         m->nb_segs  = 1;
         m->next     = NULL;
 
-        my_ts_set(m,thread_args->global_state->mbuf_ts_off,ns-first_ns);
+        my_ts_set(m, thread_args->mbuf_ts_off, ns - first_ns);
 
-        // Copy payload into mbuf, auto chain for jumbo
         if (append_bytes_to_mbuf(&m, mp, data, caplen) != 0) {
             rte_pktmbuf_free(m);
             pcap_close(pc);
+            mbuf_array_free(mbuff_array);
+            free(mbuff_array);
             return -ENOMEM;
         }
-        
-        //add mbuff to mbuff array 
-        mbuf_array_push(mbuff_array,m);
 
+        mbuf_array_push(mbuff_array, m);
     }
-    
 
-    //push mbuff array into global pcap storage struct
-    pcap_storage_add(thread_args->global_state->pcap_storage_t, 
-        mbuff_array, mbuff_array->count, 
-        filename, 
-        &thread_args->pcap_controller->latest_slotid,
-        first_ns, 
-        last_ns,
-        total_bytes);
+    pcap_close(pc);
 
-    return 0;
-}
+    /* Build the slot privately */
+    struct pcap_mbuff_slot *slot = calloc(1, sizeof(*slot));
+    if (!slot) {
+        mbuf_array_free(mbuff_array);
+        free(mbuff_array);
+        return -ENOMEM;
+    }
 
+    snprintf(slot->pcap_name, sizeof(slot->pcap_name), "%s", filename);
+    slot->numpackets    = (unsigned int)mbuff_array->count;
+    slot->mbuf_array    = mbuff_array;
+    slot->start_ns      = first_ns;
+    slot->end_ns        = last_ns;
+    slot->delta_ns      = last_ns - first_ns;
+    slot->size_in_bytes = total_bytes;
+    slot->mode          = UNASSIGNED;
 
-/** 
-* Iterate through loaded pcaps and apply ACL rules to each packet, storing policy decision in mbuf private area 
-* @param thread_args Pointer to global thread args struct
-* @param slotid Pcap storage slot ID to process
-* @return 0 on success, negative error code on failure
-**/
-int process_acl_on_loaded_pcap(struct pthread_args *thread_args, unsigned int slotid){
+    /* Publish the slot pointer atomically.
+     * After this point, do not mutate slot or mbuff_array fields.
+     */
+    pcap_storage_publish_slot(st, slotid, slot);
 
-    //get acl runtime
-    
-    //get mbuf array for slotid 
-
-    //for each mbuf 
-        // create headers struct 
-        // build L2 and L3 flow keys 
-        // classify packet with ACL 
-        // store policy decision in mbuf private area
+    /* Update controller visible latest slot id */
+    thread_args->pcap_controller->latest_slotid = slotid;
 
     return 0;
 }
 
+/**
+ * Iterate through loaded pcaps and apply ACL rules to each packet, storing policy decision in mbuf private area
+ * NOTE: You can safely run this only on slots that are already published and immutable in shape.
+ * If you plan to mutate per-packet metadata arrays, prefer allocating meta arrays once and writing them
+ * before publishing, OR gate ACL processing to STOPPED state.
+ */
+int process_acl_on_loaded_pcap(struct pthread_args *thread_args, unsigned int slotid) {
+    (void)thread_args;
+    (void)slotid;
+    return 0;
+}
 
-
-/* Main thread called by control_server thread to load and pre-process pcap files if */
+/* Main loader thread */
 void *run_pcap_loader_thread(void *arg) {
-    struct pthread_args *thread_args  = (struct pthread_args *)arg;
-    struct pcap_loader_ctl * ctl = thread_args->pcap_controller;
+    ppr_thread_args_t *thread_args  = (ppr_thread_args_t *)arg;
+    struct pcap_loader_ctl *ctl = thread_args->pcap_controller;
 
-    //initialize storage structs 
-    pcap_storage_init(thread_args->global_state->pcap_storage_t);
+    pcap_storage_init(thread_args->pcap_storage);
 
-    //initialize lock when thread launches
     pthread_mutex_lock(&ctl->lock);
 
     while (1) {
-        // Wait for a command, use cond_wait so we don't have to poll 
         while (ctl->command == CMD_NONE) {
             pthread_cond_wait(&ctl->cond, &ctl->lock);
         }
 
-        // process commands
         if (ctl->command == CMD_EXIT) {
             pthread_mutex_unlock(&ctl->lock);
             break;
@@ -315,27 +345,25 @@ void *run_pcap_loader_thread(void *arg) {
 
         if (ctl->command == CMD_LOAD_PCAP) {
             ctl->busy = true;
-            
-            //copy filename over so we can release the lock while loading
+
             char file[256];
             snprintf(file, sizeof(file), "%s", ctl->filename);
-            
-            //clear command 
+
             ctl->command = CMD_NONE;
-            
-            //unlock struct now that we know the file and can load it
+
             pthread_mutex_unlock(&ctl->lock);
 
-            //process pcap file
-            int rc = process_pcap(thread_args,file);
-
+            int rc = process_pcap(thread_args, file);
 
             pthread_mutex_lock(&ctl->lock);
             ctl->result = rc;
             ctl->busy = false;
         }
+
+        /* Add CMD_APPLY_ACL_RULES handling here if desired */
     }
 
-    pcap_storage_free(thread_args->global_state->pcap_storage_t);
+    /* Shutdown: no concurrent readers should remain */
+    pcap_storage_free(thread_args->pcap_storage);
     return NULL;
 }

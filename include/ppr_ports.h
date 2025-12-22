@@ -137,6 +137,9 @@ typedef struct ppr_port_entry{
     struct rte_mempool *mbuf_pool;
     uint16_t nb_rxd;
     uint16_t nb_txd;
+    
+    //traffic gen related info 
+    _Atomic bool tx_enabled; //is tx enabled on this port
 
     //port state info (reported)
     bool admin_state;

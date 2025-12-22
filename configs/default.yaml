@@ -40,16 +40,12 @@ port_settings:
 #mempool configuration settings for wps 
 #rx mempool used to store incoming packets
 mempool_settings: 
-  - name: network_mempool
-    mpool_entries: 131072
+  - name: global_pcap_mempool
+    mpool_entries: 1000000
     mpool_cache: 256
 
-  - name: clone_mempool
-    mpool_entries: 65536
-    mpool_cache: 256
-
-  - name: copy_mempool
-    mpool_entries: 65536
+  - name: copy_mempools
+    mpool_entries: 8192
     mpool_cache: 256
 
 #ACL table configuration settings

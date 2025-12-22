@@ -3,21 +3,7 @@ SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
 Filename: main.c 
-Description: Primary entry point for the Pcap Replay DPDK dataplane application. The high level flow of this code is as follows: 
-1) Load config file - the Pcap Replay dataplane uses the same exact config.json file used by the paired python code to keep config sources in sync. 
-2) Allocate tx and buffer core ID's - To keep things as generic as possible, the config file only specifies the number of tx cores and the total core count. 
-   After loading these fields, the application dynamically figures out which core ID's to map to tx threads and how many buffer threads should map to each 
-   tx core. 
-3) Mempool creation - DPDK memory pools are created for pcap template storage as well as separate clone only mempools (initialized for mbuff header storage only)
-   for each tx core identified above. 
-4) Initialize all ports passed into the DPDK application from the CLI args. Note, this app is designed to operate on VF ports to provide the most flexibility 
-   of transmit control. The application assumes rate limiting is supported per VF port in hardware and handled outside of the actual datapath. 
-5) Shared memory initialization - there are a number of shared memory structures for passing state, statistics, and control parameters between DPDK and pthreads
-   and to relay command / control / status from python services via the socket based control server 
-6) Launch Tx and Buffer lcore threads - spawn dedicated tx and buffer DPDK workers on assigned cores. 
-7) Launch Control / Statistics / Pcap_Loader pthreads. 
-
-At the end the master thread sits idle as all other spawned threads performed their allocated work assignments. 
+Description: 
 */
 
 #define _GNU_SOURCE
@@ -71,6 +57,7 @@ static void signal_handler(int signum)
 
 //global error flag 
 _Atomic int ppr_fatal_error = 0;
+
 void ppr_fatal(const char *fmt, ...)
 {
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_CRIT, "FATAL ERROR: %s", fmt);
@@ -98,7 +85,7 @@ int main(int argc, char **argv) {
     struct rte_mempool **core_clone_mempools    = NULL; 
 
     //start init, note we use PPR_LOG macro defined in ppr_log.h for all logging, this allows for different log levels and per module logging control
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\Pcap Replay Application Starting\n\n");
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\nPcap Replay Application Starting\n\n");
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing DPDK EAL ###############################\n\n");
 
@@ -198,26 +185,49 @@ int main(int argc, char **argv) {
 
     /* -------------------------- Initialize Mempools ---------------------------------------------------------------- */
 
-    // Creates a new mempool in memory to hold the mbufs. */
-    app_mempool = rte_pktmbuf_pool_create("PCAP_MBUF_POOL", NUM_MBUFS,
-        MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
-
-    if (app_mempool == NULL)
-        rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
-    
-    //create per tx core clone only mempools
-    core_clone_mempools = calloc(tx_cores,sizeof(struct rte_mempool *));
-    for (int i =0; i<tx_cores;i++){
-
-        char name[32];
-        sprintf(name,"tx_core_%d_mempool",i);
-
-        core_clone_mempools[i] = rte_pktmbuf_pool_create(name, NUM_MBUFS,
-        MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
-
-        if (core_clone_mempools[i] == NULL)
-            rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",name);
+    struct rte_mempool *pcap_mempool = NULL;
+    struct rte_mempool **copy_mempools = rte_zmalloc("copy_mempools_array",
+                                        sizeof(struct rte_mempool *) * tx_cores,
+                                        RTE_CACHE_LINE_SIZE);
+    if (!copy_mempools){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for copy mempool array\n");
     }
+
+    //initialize each mempool from config file settings
+    for (unsigned int i=0; i < ppr_app_cfg->mempool_settings_count; i++){
+        ppr_mempool_t *mpool_cfg = &ppr_app_cfg->mempool_settings[i];
+
+        //create the global pcap storage mempool 
+        if (strcmp(mpool_cfg->name, "global_pcap_mempool") == 0){
+            pcap_mempool = rte_pktmbuf_pool_create(mpool_cfg->name, mpool_cfg->mpool_entries,
+                mpool_cfg->mpool_cache, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+
+            if (pcap_mempool == NULL)
+                rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",mpool_cfg->name);
+
+            PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Created global pcap mempool %s with %u entries\n",
+                mpool_cfg->name, mpool_cfg->mpool_entries);
+        }
+        //else create per tx core copy pools 
+        else if (strcmp(mpool_cfg->name, "copy_mempools") == 0){
+            for(unsigned int i=0; i < tx_cores; i++){
+                char mempool_name[64];
+                snprintf(mempool_name, sizeof(mempool_name), "copy_mempool_core_%u", i);
+                copy_mempools[i] = rte_pktmbuf_pool_create(mempool_name, mpool_cfg->mpool_entries,
+                    mpool_cfg->mpool_cache, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+
+                if (copy_mempools[i] == NULL)
+                    rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",mempool_name);
+
+                PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Created copy mempool %s with %u entries\n",
+                    mempool_name, mpool_cfg->mpool_entries);
+            }
+        }
+
+        else {
+            rte_exit(EXIT_FAILURE, "Unknown mempool name %s in config\n",mpool_cfg->name);
+        }
+    }   
 
 
     /* -------------------------- Configure ports --------------------------------------------------------------- */
@@ -387,7 +397,7 @@ int main(int argc, char **argv) {
     CPU_ZERO(&cpuset);
     CPU_SET(main_lcore_id, &cpuset);
 
-    
+
     
     /* -------------------------- Mark app as initialized, end of init thread until exit ------------------ */
 
