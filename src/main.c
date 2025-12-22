@@ -184,7 +184,8 @@ int main(int argc, char **argv) {
     rcu_ctx->num_readers = tx_cores;
 
     /* -------------------------- Initialize Mempools ---------------------------------------------------------------- */
-
+    size_t priv_sz = RTE_ALIGN_CEIL(sizeof(ppr_priv_t), RTE_CACHE_LINE_SIZE);
+    
     struct rte_mempool *pcap_mempool = NULL;
     struct rte_mempool **copy_mempools = rte_zmalloc("copy_mempools_array",
                                         sizeof(struct rte_mempool *) * tx_cores,
@@ -200,7 +201,7 @@ int main(int argc, char **argv) {
         //create the global pcap storage mempool 
         if (strcmp(mpool_cfg->name, "global_pcap_mempool") == 0){
             pcap_mempool = rte_pktmbuf_pool_create(mpool_cfg->name, mpool_cfg->mpool_entries,
-                mpool_cfg->mpool_cache, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+                mpool_cfg->mpool_cache, priv_sz, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
             if (pcap_mempool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",mpool_cfg->name);
@@ -214,7 +215,7 @@ int main(int argc, char **argv) {
                 char mempool_name[64];
                 snprintf(mempool_name, sizeof(mempool_name), "copy_mempool_core_%u", i);
                 copy_mempools[i] = rte_pktmbuf_pool_create(mempool_name, mpool_cfg->mpool_entries,
-                    mpool_cfg->mpool_cache, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+                    mpool_cfg->mpool_cache, priv_sz, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
                 if (copy_mempools[i] == NULL)
                     rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",mempool_name);

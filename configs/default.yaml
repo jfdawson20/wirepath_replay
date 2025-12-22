@@ -11,10 +11,6 @@ thread_settings:
   tx_cores: 1
   base_lcore_id: 0
 
-multi_tenant_settings:
-  enable_multi_tenancy: false
-  method: vxlan #qinq or vxlan
-
 #NIC port configuration / mapping
 port_settings: 
   - name: port0
@@ -53,27 +49,6 @@ acl_table_settings:
   #startup_cfg_file: "acl_rules/example_acl_rules.yaml"
   qsbr_reclaim_size: 2048
   qsbr_reclaim_limit: 4096  
-
-#configure global flowtable settings 
-flowtable_settings:
-  - table_name: "ip_flowtable"
-    key_type: "ipv46"
-    max_entries: 262144
-    default_lifetime_ms: 300000     #5 minutes
-    default_idle_timeout_ms: 30000  #30 seconds
-    hash_algo: rss
-    qsbr_reclaim_size: 2048
-    qsbr_reclaim_limit: 4096
-
-  - table_name: "l2_flowtable"
-    key_type: "l2"
-    max_entries: 16384
-    default_lifetime_ms: 300000     #5 minutes
-    default_idle_timeout_ms: 30000  #30 seconds
-    hash_algo: rss
-    qsbr_reclaim_size: 2048
-    qsbr_reclaim_limit: 4096
-
 
 
 

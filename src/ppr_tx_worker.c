@@ -47,8 +47,234 @@ double buffer arrays for valid data to transmit.
 #include "ppr_buff_worker.h"
 #include "ppr_mbuf_fields.h"
 #include "ppr_time.h"
+#include "ppr_header_extract.h"
 
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+
+#include <rte_byteorder.h>
+#include <rte_ether.h>
+#include <rte_ip.h>
+#include <rte_tcp.h>
+#include <rte_udp.h>
+#include <rte_mbuf.h>
+
+#include "ppr_mbuf_fields.h"
+#include "ppr_actions.h"
+#include "ppr_tx_worker.h"      // for ppr_vc_ctx_t
+#include "ppr_header_extract.h" // for ppr_parse_headers + ppr_hdrs_t
+
+/* ---------------- checksum helpers (recompute) ---------------- */
+
+static inline uint16_t csum16_reduce(uint32_t sum)
+{
+    while (sum >> 16)
+        sum = (sum & 0xFFFFu) + (sum >> 16);
+    return (uint16_t)~sum;
+}
+
+static inline uint32_t csum_add_buf(uint32_t sum, const void *buf, size_t len)
+{
+    const uint16_t *p = (const uint16_t *)buf;
+    while (len >= 2) {
+        sum += *p++;
+        len -= 2;
+    }
+    if (len) /* odd tail */
+        sum += *(const uint8_t *)p;
+    return sum;
+}
+
+static inline uint16_t ipv4_hdr_checksum(struct rte_ipv4_hdr *ip)
+{
+    ip->hdr_checksum = 0;
+    uint32_t sum = 0;
+    uint16_t ihl = (uint16_t)((ip->version_ihl & 0x0F) * 4);
+    sum = csum_add_buf(sum, ip, ihl);
+    return csum16_reduce(sum);
+}
+
+static inline uint32_t ipv4_pseudo_sum(const struct rte_ipv4_hdr *ip, uint16_t l4_len, uint8_t proto)
+{
+    uint32_t sum = 0;
+    /* ip->src_addr/dst_addr are in network order */
+    sum += (uint16_t)(ip->src_addr >> 16);
+    sum += (uint16_t)(ip->src_addr & 0xFFFF);
+    sum += (uint16_t)(ip->dst_addr >> 16);
+    sum += (uint16_t)(ip->dst_addr & 0xFFFF);
+    sum += rte_cpu_to_be_16((uint16_t)proto);
+    sum += rte_cpu_to_be_16(l4_len);
+    return sum;
+}
+
+static inline uint16_t l4_checksum_ipv4(const struct rte_ipv4_hdr *ip, void *l4, uint16_t l4_len, uint8_t proto)
+{
+    uint32_t sum = ipv4_pseudo_sum(ip, l4_len, proto);
+    sum = csum_add_buf(sum, l4, l4_len);
+    return csum16_reduce(sum);
+}
+
+/* ---------------- rewrite helpers ---------------- */
+
+static inline void clear_rss_hash(struct rte_mbuf *m)
+{
+    m->hash.rss = 0;
+    m->ol_flags &= ~RTE_MBUF_F_RX_RSS_HASH;
+}
+
+/* Return true if caller should drop/free */
+bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
+{
+    if (unlikely(m == NULL || vc == NULL))
+        return true;
+
+    ppr_priv_t *priv = ppr_priv(m);
+
+    /* If action isn't valid, do nothing */
+    if (!priv->pending_policy_action.valid)
+        return false;
+
+    /* Parse packet headers (offsets, L3/L4, etc.) */
+    ppr_hdrs_t hdrs;
+    int rc = ppr_parse_headers(m, &hdrs);
+    if (rc < 0)
+        return false; /* can't safely edit -> treat as NOOP */
+
+    ppr_flow_action_kind_t act = priv->pending_policy_action.default_policy;
+
+    if (act == FLOW_ACT_NOOP)
+        return false;
+    if (act == FLOW_ACT_DROP)
+        return true;
+
+    /* We only implement OUTER L2 + OUTER IPv4 + TCP/UDP here */
+    struct rte_ether_hdr *eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+
+    bool changed_l2 = false;
+    bool changed_ip = false;
+    bool changed_l4 = false;
+
+    /* ---------- L2 ---------- */
+    if (act == FLOW_ACT_MODIFY_SRCMAC || act == FLOW_ACT_MODIFY_SRC_ALL || act == FLOW_ACT_MODIFY_ALL) {
+        /* vc->src_mac is uint8_t[6] per your struct */
+        memcpy(&eth->src_addr, vc->src_mac, RTE_ETHER_ADDR_LEN);
+        changed_l2 = true;
+    }
+
+    if (act == FLOW_ACT_MODIFY_DSTMAC || act == FLOW_ACT_MODIFY_DST_ALL || act == FLOW_ACT_MODIFY_ALL) {
+        memcpy(&eth->dst_addr, vc->dst_mac, RTE_ETHER_ADDR_LEN);
+        changed_l2 = true;
+    }
+
+    /* ---------- L3/L4 (IPv4 only in this version) ---------- */
+    if (hdrs.l3_type == PPR_L3_IPV4) {
+        struct rte_ipv4_hdr *ip4 = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *, hdrs.outer_l3_ofs);
+
+        if (act == FLOW_ACT_MODIFY_SRCIP || act == FLOW_ACT_MODIFY_SRC_ALL || act == FLOW_ACT_MODIFY_ALL) {
+            ip4->src_addr = rte_cpu_to_be_32(vc->src_ip); /* vc is host-order */
+            changed_ip = true;
+        }
+        if (act == FLOW_ACT_MODIFY_DSTIP || act == FLOW_ACT_MODIFY_DST_ALL || act == FLOW_ACT_MODIFY_ALL) {
+            ip4->dst_addr = rte_cpu_to_be_32(vc->dst_ip);
+            changed_ip = true;
+        }
+
+        /* L4 ports only if TCP/UDP */
+        if (hdrs.l4_type == PPR_L4_TCP) {
+            struct rte_tcp_hdr *tcp = rte_pktmbuf_mtod_offset(m, struct rte_tcp_hdr *, hdrs.outer_l4_ofs);
+
+            if (act == FLOW_ACT_MODIFY_SRCPORT || act == FLOW_ACT_MODIFY_SRC_ALL || act == FLOW_ACT_MODIFY_ALL) {
+                tcp->src_port = rte_cpu_to_be_16(vc->src_port);
+                changed_l4 = true;
+            }
+            if (act == FLOW_ACT_MODIFY_DSTPORT || act == FLOW_ACT_MODIFY_DST_ALL || act == FLOW_ACT_MODIFY_ALL) {
+                tcp->dst_port = rte_cpu_to_be_16(vc->dst_port);
+                changed_l4 = true;
+            }
+
+            /* Recompute checksums if any relevant field changed */
+            if (changed_ip || changed_l4) {
+                ip4->hdr_checksum = ipv4_hdr_checksum(ip4);
+
+                uint16_t ihl = (uint16_t)((ip4->version_ihl & 0x0F) * 4);
+                uint16_t tot_len = rte_be_to_cpu_16(ip4->total_length);
+                uint16_t l4_len = (tot_len > ihl) ? (uint16_t)(tot_len - ihl) : 0;
+
+                tcp->cksum = 0;
+                tcp->cksum = l4_checksum_ipv4(ip4, tcp, l4_len, IPPROTO_TCP);
+            }
+
+        } else if (hdrs.l4_type == PPR_L4_UDP) {
+            struct rte_udp_hdr *udp = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *, hdrs.outer_l4_ofs);
+
+            if (act == FLOW_ACT_MODIFY_SRCPORT || act == FLOW_ACT_MODIFY_SRC_ALL || act == FLOW_ACT_MODIFY_ALL) {
+                udp->src_port = rte_cpu_to_be_16(vc->src_port);
+                changed_l4 = true;
+            }
+            if (act == FLOW_ACT_MODIFY_DSTPORT || act == FLOW_ACT_MODIFY_DST_ALL || act == FLOW_ACT_MODIFY_ALL) {
+                udp->dst_port = rte_cpu_to_be_16(vc->dst_port);
+                changed_l4 = true;
+            }
+
+            if (changed_ip || changed_l4) {
+                ip4->hdr_checksum = ipv4_hdr_checksum(ip4);
+
+                /* UDP length field already in header */
+                uint16_t l4_len = rte_be_to_cpu_16(udp->dgram_len);
+
+                udp->dgram_cksum = 0;
+                udp->dgram_cksum = l4_checksum_ipv4(ip4, udp, l4_len, IPPROTO_UDP);
+            }
+
+        } else {
+            /* non TCP/UDP: if IP changed, still fix IPv4 hdr checksum */
+            if (changed_ip) {
+                ip4->hdr_checksum = ipv4_hdr_checksum(ip4);
+            }
+        }
+
+    } else {
+        /* IPv6 or non-IP: not implemented here */
+        /* If you changed L2 only, that's fine; no IP checksum work needed. */
+    }
+
+    /* If we changed anything that affects a 5-tuple / flow hash, clear RSS hash validity */
+    if (changed_ip || changed_l4) {
+        clear_rss_hash(m);
+    }
+
+    (void)changed_l2;
+    return false;
+}
+
+
+
+
+/** 
+* Build a burst of packets to transmit for a given virtual client on a port stream context.
+* @param tx_pkts
+*   Array to populate with packets to transmit.
+* @param max_pkts
+*   Maximum number of packets to add to the burst.
+* @param pcap_storage
+*   Pointer to the global pcap storage structure.
+* @param slot_id
+*   Slot ID of the pcap to read packets from.
+* @param mbuf_ts_off
+*   Offset of the timestamp field in the mbuf private area.
+* @param tx_pool
+*   Mempool to allocate cloned mbufs from.
+* @param psc
+*   Pointer to the port stream context.
+* @param vc
+*   Pointer to the virtual client context.
+* @param phase
+*   Current phase time for pacing.
+* @return
+*   Number of packets added to the burst.
+**/
 static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
                uint16_t max_pkts,
                pcap_storage_t *pcap_storage,
@@ -64,15 +290,19 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
     if (slot_id == UINT32_MAX)
         return 0;
 
-    pcap_mbuff_slot_t *slot =
-        atomic_load_explicit(&pcap_storage->slots[slot_id], memory_order_acquire);
+    //get the pointer to the pcap mbuf slot
+    pcap_mbuff_slot_t *slot = atomic_load_explicit(&pcap_storage->slots[slot_id], memory_order_acquire);
     if (!slot || !slot->mbuf_array || !slot->mbuf_array->pkts)
         return 0;
 
+    //while we have budget and packets in this vc's pcap stream
     while (nb < max_pkts && vc->pcap_idx < slot->numpackets) {
+        
+        //get the next template mbuf from the pcap slot
         struct rte_mbuf *tmpl = slot->mbuf_array->pkts[vc->pcap_idx];
         if (!tmpl) break;
 
+        //if we are pacing based on pcap timestamps, check if this packet is due yet
         if (psc->pace_mode == VC_PACE_PCAP_TS) {
             uint64_t rel_ts = my_ts_get(tmpl, mbuf_ts_off);
             if (unlikely(rel_ts < vc->base_rel_ns)) {
@@ -85,11 +315,17 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
 
         }
 
-        // clone template (shares data), good enough for skeleton
-        struct rte_mbuf *c = rte_pktmbuf_copy(tmpl, tx_pool,0,UINT32_MAX);
+        // create a packet copy since we may need to modify it 
+        struct rte_mbuf *c = ppr_copy_with_priv(tmpl, tx_pool);
         if (unlikely(c == NULL)) {
             printf("failed to copy\n");
             break; // pool pressure: just send the ones we cloned
+        }
+
+        //apply any packet modifications
+        if (unlikely(ppr_modify_mbuf(c, vc))) {
+            rte_pktmbuf_free(c);
+            continue;
         }
 
         tx_pkts[nb++] = c;

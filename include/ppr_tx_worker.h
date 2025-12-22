@@ -73,6 +73,17 @@ typedef struct __attribute__((aligned(CACHE_LINE))) ppr_vc_ctx {
     uint64_t flow_epoch;          // increments each epoch for tuple uniqueness
     uint32_t emit_budget;     // for non pacing modes (VC_PACE_NONE) how many packets to tx before yielding to next vc
 
+
+    //these are what is actually used to do dynamic replacement 
+    //values derived from identity profile. 
+    uint32_t src_ip; 
+    uint32_t dst_ip;
+    uint16_t src_port; 
+    uint16_t dst_port;
+    
+    uint8_t  src_mac[6];
+    uint8_t  dst_mac[6];
+
     uint32_t local_client_idx;
     uint32_t global_client_id;
     
