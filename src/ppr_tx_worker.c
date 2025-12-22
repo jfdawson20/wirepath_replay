@@ -150,15 +150,15 @@ int run_tx_worker(__rte_unused void *arg) {
             uint16_t tx_queue_id = tx_worker_ctx->queue_id_by_port[port_idx];
             ppr_port_stream_ctx_t *port_stream_ctx = &tx_worker_ctx->port_stream[port_idx];
 
-            if (port_stream_ctx == NULL){
-                PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Port stream context is NULL for port index %u\n", port_idx);
-                continue;
-            }
             uint32_t slot_id = atomic_load_explicit(&port_stream_ctx->slot_id, memory_order_acquire);
             if (slot_id == UINT32_MAX) {
                 PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG, "No pcap slot assigned for port index %u\n", port_idx);
                 continue;
             }
+
+            uint64_t elapsed    = now_ns - port_stream_ctx->global_start_ns;
+            uint64_t epoch      = 0;
+            uint64_t phase      = 0;
 
             //figure out our epoch and phase for this stream context
             if (port_stream_ctx->pace_mode == VC_PACE_PCAP_TS) {
@@ -167,11 +167,13 @@ int run_tx_worker(__rte_unused void *arg) {
                     PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Replay window ns is 0 for port index %u\n", port_idx);
                     continue;
                 }
+                
+                epoch = elapsed / port_stream_ctx->replay_window_ns;
+                phase = elapsed % port_stream_ctx->replay_window_ns;
+
             }
     
-            uint64_t elapsed = now_ns - port_stream_ctx->global_start_ns;
-            uint64_t epoch = elapsed / port_stream_ctx->replay_window_ns;
-            uint64_t phase = elapsed % port_stream_ctx->replay_window_ns;
+
 
             /* ---------------------------------- Iterate over all virtual clients for this port ----------------------*/
             uint32_t nclients = port_stream_ctx->num_clients;
@@ -185,7 +187,7 @@ int run_tx_worker(__rte_unused void *arg) {
                 uint32_t vc_idx = (start + k) % nclients;
                 ppr_vc_ctx_t *vc = &port_stream_ctx->clients[vc_idx];
 
-                if (vc->epoch != epoch) {
+                if (vc->epoch != epoch && port_stream_ctx->pace_mode == VC_PACE_PCAP_TS) {
                     vc->epoch = epoch;
                     vc->pcap_idx = vc->start_idx;
                     vc->flow_epoch++; 
