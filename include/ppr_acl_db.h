@@ -1,5 +1,5 @@
-#ifndef _PPR_ACL_DB_H__
-#define _PPR_ACL_DB_H_
+#ifndef PPR_ACL_DB_H
+#define PPR_ACL_DB_H
 
 #include "ppr_acl.h"
 
@@ -41,7 +41,7 @@ typedef struct ppr_acl_rule_db {
     // later: ipv6 db
 } ppr_acl_rule_db_t;
 
-#endif /* _PPR_ACL_DB_H__ */
+
 
 /* proto functions */
 //manage rule database
@@ -71,3 +71,5 @@ int ppr_acl_db_commit(ppr_acl_runtime_t *rt, ppr_acl_rule_db_t *db);
 
 //debug prints 
 void ppr_acl_db_dump_status(ppr_acl_rule_db_t *db);
+
+#endif /* PPR_ACL_DB_H__ */

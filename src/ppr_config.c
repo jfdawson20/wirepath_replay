@@ -14,13 +14,6 @@ If changes are made to the config file format, they must be reflected here and i
 
 /* ----- enum string maps ----- */
 
-
-static const cyaml_strval_t multi_tenant_protocol_strings[] = {
-    { "none",  MULTI_TENANT_PROTOCOL_NONE },
-    { "qinq",  MULTI_TENANT_PROTOCOL_QINQ },
-    { "vxlan", MULTI_TENANT_PROTOCOL_VXLAN },
-};  
-
 static const cyaml_strval_t log_mode_strings[] = {
     { "stdout", LOG_STDOUT },
     { "file",   LOG_FILE },
@@ -29,18 +22,6 @@ static const cyaml_strval_t log_mode_strings[] = {
 static const cyaml_strval_t port_type_strings[] = {
     { "datapath", PORT_TYPE_DATAPATH },
 };
-
-static const cyaml_strval_t hash_algo_strings[] = {
-    { "crc32", FT_HASH_CRC32 },
-    { "rss",   FT_HASH_RSS   },
-};
-
-static const cyaml_strval_t flow_key_type_strings[] = {
-    { "ipv46", PPR_FT_KEY_IP },
-    { "l2",    PPR_FT_KEY_L2 },
-};
-
-
 
 
 /* ----- leaf mappings ----- */
@@ -51,12 +32,6 @@ static const cyaml_schema_field_t app_settings_fields[] = {
     CYAML_FIELD_UINT       ("global_rx_burst_size",CYAML_FLAG_DEFAULT, ppr_app_settings_t, global_rx_burst_size),
     CYAML_FIELD_UINT       ("global_tx_burst_size",CYAML_FLAG_DEFAULT, ppr_app_settings_t, global_tx_burst_size),
     CYAML_FIELD_UINT       ("controller_port",  CYAML_FLAG_DEFAULT, ppr_app_settings_t, controller_port),
-    CYAML_FIELD_END
-};
-
-static const cyaml_schema_field_t multi_tenant_settings_fields[] = {
-    CYAML_FIELD_BOOL       ("enable_multi_tenancy", CYAML_FLAG_DEFAULT, ppr_multi_tenant_settings_t, enable_multi_tenancy),
-    CYAML_FIELD_ENUM       ("method",               CYAML_FLAG_DEFAULT, ppr_multi_tenant_settings_t, method, multi_tenant_protocol_strings, CYAML_ARRAY_LEN(multi_tenant_protocol_strings)),
     CYAML_FIELD_END
 };
 
@@ -97,36 +72,9 @@ static const cyaml_schema_field_t acl_table_settings_fields[] = {
 };
 
 
-/* flowtable_settings */
-static const cyaml_schema_field_t flowtable_cfg_fields[] = {
-    CYAML_FIELD_STRING_PTR ("table_name",          CYAML_FLAG_POINTER, ppr_flowtable_inst_cfg_t, table_name, 1, CYAML_UNLIMITED),
-    CYAML_FIELD_ENUM       ("key_type",           CYAML_FLAG_DEFAULT,  ppr_flowtable_inst_cfg_t, key_type,
-                            flow_key_type_strings, CYAML_ARRAY_LEN(flow_key_type_strings)),
-    CYAML_FIELD_UINT       ("max_entries",        CYAML_FLAG_DEFAULT,  ppr_flowtable_inst_cfg_t, max_entries),
-    CYAML_FIELD_ENUM       ("hash_algo",          CYAML_FLAG_DEFAULT,  ppr_flowtable_inst_cfg_t, hash_algo,
-                            hash_algo_strings,     CYAML_ARRAY_LEN(hash_algo_strings)),
-    CYAML_FIELD_UINT       ("default_lifetime_ms",     CYAML_FLAG_DEFAULT, ppr_flowtable_inst_cfg_t, default_lifetime_ms),
-    CYAML_FIELD_UINT       ("default_idle_timeout_ms", CYAML_FLAG_DEFAULT, ppr_flowtable_inst_cfg_t, default_idle_timeout_ms),
-    CYAML_FIELD_UINT       ("qsbr_reclaim_size",  CYAML_FLAG_DEFAULT,  ppr_flowtable_inst_cfg_t, qsbr_reclaim_size),
-    CYAML_FIELD_UINT       ("qsbr_reclaim_limit", CYAML_FLAG_DEFAULT,  ppr_flowtable_inst_cfg_t, qsbr_reclaim_limit),
-    CYAML_FIELD_END
-};
-static const cyaml_schema_value_t flowtable_cfg_schema = {
-    CYAML_VALUE_MAPPING(CYAML_FLAG_DEFAULT, ppr_flowtable_inst_cfg_t, flowtable_cfg_fields),
-};
-
-
 /* ----- value schemas for sequences & mappings ----- */
 //don't use these currently, but may in the future
 #if 0
-static const cyaml_schema_value_t flowtable_settings_schema = {
-    CYAML_VALUE_MAPPING(CYAML_FLAG_DEFAULT, ppr_flowtable_settings_t, flowtable_settings_fields),
-};
-
-static const cyaml_schema_value_t multi_tenant_settings_schema = {
-    CYAML_VALUE_MAPPING(CYAML_FLAG_DEFAULT, ppr_multi_tenant_settings_t, multi_tenant_settings_fields),
-};
-
 static const cyaml_schema_value_t thread_settings_schema = {
     CYAML_VALUE_MAPPING(CYAML_FLAG_DEFAULT, ppr_thread_settings_t, thread_settings_fields),
 };
@@ -151,9 +99,6 @@ static const cyaml_schema_field_t ppr_config_fields[] = {
     CYAML_FIELD_MAPPING ("app_settings",
         CYAML_FLAG_DEFAULT, ppr_config_t, app_settings, app_settings_fields),
 
-    CYAML_FIELD_MAPPING ("multi_tenant_settings",
-        CYAML_FLAG_DEFAULT, ppr_config_t, multi_tenant_settings, multi_tenant_settings_fields),
-
     CYAML_FIELD_MAPPING ("thread_settings",
         CYAML_FLAG_DEFAULT, ppr_config_t, thread_settings, thread_settings_fields),
 
@@ -167,10 +112,6 @@ static const cyaml_schema_field_t ppr_config_fields[] = {
 
     CYAML_FIELD_MAPPING ("acl_table_settings",
         CYAML_FLAG_DEFAULT, ppr_config_t, acl_table_settings, acl_table_settings_fields),
-        
-    CYAML_FIELD_SEQUENCE ("flowtable_settings",
-        CYAML_FLAG_POINTER, ppr_config_t, flowtable_settings, &flowtable_cfg_schema,
-        0, CYAML_UNLIMITED),
 
     CYAML_FIELD_END
 };

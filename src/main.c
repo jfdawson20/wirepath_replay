@@ -332,8 +332,8 @@ int main(int argc, char **argv) {
     //flow entries also indicate which policy table was the "decider" for the action applied to the packet
     //this allows us to only refresh the relevant policy table when epochs differ
     
-    global_policy_epochs->acl_policy_epoch      = 1;   //the ACL ruleset has been updated
-    global_policy_epochs->lb_policy_epoch       = 1;   //the load balancer groupings have been updated 
+    global_policy_epochs->acl_policy_epoch          = 1;   //the ACL ruleset has been updated
+    global_policy_epochs->pcap_storage_epoch        = 1;   //the load balancer groupings have been updated 
 
 
 

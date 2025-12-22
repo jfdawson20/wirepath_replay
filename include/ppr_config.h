@@ -28,11 +28,6 @@ typedef enum {
     PORT_MODE_MIRROR = 1,
 } ppr_port_mode_t;
 
-typedef enum {
-    MULTI_TENANT_PROTOCOL_NONE = 0,
-    MULTI_TENANT_PROTOCOL_QINQ = 1,
-    MULTI_TENANT_PROTOCOL_VXLAN = 2,
-} ppr_multi_tenant_protocol_t;
 
 /* app_settings */
 typedef struct ppr_app_settings{
@@ -43,11 +38,6 @@ typedef struct ppr_app_settings{
     uint16_t global_tx_burst_size; /* 128 */
     uint16_t controller_port;   /* 9090 */
 } ppr_app_settings_t;
-
-typedef struct ppr_multi_tenant_settings{
-    bool     enable_multi_tenancy; 
-    ppr_multi_tenant_protocol_t method;
-} ppr_multi_tenant_settings_t;
 
 /* thread_settings */
 typedef struct ppr_thread_settings{
@@ -81,23 +71,10 @@ typedef struct ppr_acl_table_settings{
     uint32_t  qsbr_reclaim_limit; /* e.g., 4096 */
 } ppr_acl_table_settings_t;
 
-/* flowtable_settings */
-typedef struct ppr_flowtable_inst_cfg{
-    char             *table_name;             /* "ip_flowtable" */
-    ppr_ft_key_kind_t key_type;            /* "ipv46" or "l2" */
-    uint32_t          max_entries;           /* 1048576 */
-    ft_hash_type_t    hash_algo;             /* "crc32" */
-    uint32_t          default_lifetime_ms;        /* 300000 */
-    uint32_t          default_idle_timeout_ms;    /* 30000 */
-    uint32_t          qsbr_reclaim_size;     /* 2048 */
-    uint32_t          qsbr_reclaim_limit;    /* 4096 */
-} ppr_flowtable_inst_cfg_t;
-
 /* Top-level config */
 typedef struct ppr_config{
     ppr_app_settings_t           app_settings;
     ppr_thread_settings_t        thread_settings;
-    ppr_multi_tenant_settings_t  multi_tenant_settings;
 
     /* port_settings: sequence + count */
     ppr_port_t                  *port_settings;
@@ -108,10 +85,6 @@ typedef struct ppr_config{
     unsigned                    mempool_settings_count;
 
     ppr_acl_table_settings_t       acl_table_settings;
-
-    /* Flow table settings*/
-    ppr_flowtable_inst_cfg_t        *flowtable_settings;
-    uint32_t                        flowtable_settings_count;
 
 } ppr_config_t;
 

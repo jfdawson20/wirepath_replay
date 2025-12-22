@@ -5,6 +5,7 @@
 #include "ppr_acl.h"
 #include "ppr_acl_db.h"
 #include "ppr_log.h"
+#include "ppr_app_defines.h"
 
 /* Control RPC API Functions */
 int ppr_cmd_get_acl_db(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args);

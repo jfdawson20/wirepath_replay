@@ -25,12 +25,6 @@ static const cyaml_schema_field_t ppr_yaml_acl_action_fields[] = {
         ppr_yaml_acl_action_t, default_policy,
         0, CYAML_UNLIMITED),
 
-    CYAML_FIELD_SEQUENCE(
-        "egress_ports", CYAML_FLAG_POINTER,
-        ppr_yaml_acl_action_t, egress_ports,
-        &ppr_yaml_string_ptr_value,
-        0, CYAML_UNLIMITED),
-
     CYAML_FIELD_END
 };
 
@@ -266,10 +260,16 @@ static ppr_flow_action_kind_t policy_from_str(const char *s)
     if (!s) return FLOW_ACT_DROP;
 
     if (!strcasecmp(s, "FLOW_ACT_NOOP"))         return FLOW_ACT_NOOP;
-    if (!strcasecmp(s, "FLOW_ACT_FWD_PORT"))     return FLOW_ACT_FWD_PORT;
-    if (!strcasecmp(s, "FLOW_ACT_FWD_LB"))       return FLOW_ACT_FWD_LB;
-    if (!strcasecmp(s, "FLOW_ACT_FWD_LB_PORT"))  return FLOW_ACT_FWD_LB_PORT;
     if (!strcasecmp(s, "FLOW_ACT_DROP"))         return FLOW_ACT_DROP;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_SRCMAC")) return FLOW_ACT_MODIFY_SRCMAC;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_SRCIP"))  return FLOW_ACT_MODIFY_SRCIP;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_SRCPORT"))return FLOW_ACT_MODIFY_SRCPORT;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_SRC_ALL")) return FLOW_ACT_MODIFY_SRC_ALL;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_DSTMAC")) return FLOW_ACT_MODIFY_DSTMAC;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_DSTIP"))  return FLOW_ACT_MODIFY_DSTIP;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_DSTPORT"))return FLOW_ACT_MODIFY_DSTPORT;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_DST_ALL")) return FLOW_ACT_MODIFY_DST_ALL;
+    if (!strcasecmp(s, "FLOW_ACT_MODIFY_ALL"))    return FLOW_ACT_MODIFY_ALL;   
     // extend as you add types
     return FLOW_ACT_DROP;
 }
@@ -451,32 +451,6 @@ static int yaml_action_to_policy(const ppr_yaml_acl_action_t *ya,
 
     //set default policy action from string in yaml, defaults to drop policy if not present or invalid
     out->default_policy = policy_from_str(ya->default_policy);
-
-    if(out->default_policy != FLOW_ACT_DROP){
-        //egress ports provide by name, convert to global index to store in policy action
-        for (uint32_t i = 0; i < ya->egress_ports_count && i < PPR_MAX_EGRESS_TARGETS; i++) {
-
-            const char *name = ya->egress_ports[i];
-            ppr_port_entry_t *p = ppr_find_port_byname(global_port_list, name);
-            if (!p) {
-                PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR,
-                        "ACL YAML: unknown egress port '%s'\n", name);
-                return -EINVAL;
-            }
-            out->egress_port_ids[i] = p->global_port_index;
-            out->egress_target_count++;
-        }
-
-    }
-    else {
-        ppr_port_entry_t *drop_port = ppr_find_port_byname(global_port_list, "drop_port");
-        if( drop_port == NULL){
-            return -EINVAL;
-        }
-        out->egress_port_ids[0] = drop_port->global_port_index;
-        out->egress_target_count = 1;
-
-    }
 
     out->hit = false;
     return 0;

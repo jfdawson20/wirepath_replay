@@ -33,7 +33,6 @@ ppr_server is the primary control interface for the PPR application, allowing ex
 #include "ppr_app_defines.h"
 #include "ppr_control.h"
 #include "ppr_stats.h"
-#include "ppr_flowtable.h"
 #include "ppr_log.h"
 
 //RPC Library Includes

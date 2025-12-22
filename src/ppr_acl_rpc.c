@@ -8,6 +8,7 @@
 #include "ppr_acl_rpc.h"
 #include "ppr_helpers.h"
 #include "ppr_ports.h"
+#include "ppr_app_defines.h"
 
 /* --------------------------- Static / Internal JSON <> Structs Helpers ----------------------------- */
 /** 
@@ -248,19 +249,6 @@ static json_t *ppr_policy_action_to_json(ppr_ports_t *global_port_list, const pp
     json_object_set_new(obj, "default_policy",
                         json_string(ppr_flow_action_kind_to_str(action->default_policy)));
 
-    /* egress_targets */
-    json_t *eg = json_array();
-    if (!eg) {
-        json_decref(obj);
-        return NULL;
-    }
-    for (uint8_t i = 0; i < action->egress_target_count; i++){
-        ppr_port_entry_t *egress_port = ppr_find_port_by_global_index(global_port_list, action->egress_port_ids[i]);
-        if (egress_port != NULL){
-            json_array_append_new(eg, json_string(egress_port->name));
-        }
-    }
-    json_object_set_new(obj, "egress_targets", eg);
 
     return obj;
 }
@@ -277,38 +265,6 @@ static int ppr_acl_action_from_json(const json_t *obj, ppr_ports_t *global_port_
         return -EINVAL;
     out->default_policy = (ppr_flow_action_kind_t)v;
 
-    //if we are a drop action skip egress target parsing, hard code drop port in egress targets
-    if( out->default_policy != FLOW_ACT_DROP)
-    {
-        /* egress_targets array */
-        json_t *eg = json_object_get(obj, "egress_targets");
-        if (eg && json_is_array(eg)) {
-            size_t n = json_array_size(eg);
-            if (n > PPR_MAX_EGRESS_TARGETS)
-                n = PPR_MAX_EGRESS_TARGETS;
-            out->egress_target_count = (uint8_t)n;
-            for (size_t i = 0; i < n; i++) {
-                json_t *item = json_array_get(eg, i);
-                if (!json_is_string(item))
-                    return -EINVAL;
-                ppr_port_entry_t *entry = ppr_find_port_byname(global_port_list, json_string_value(item));
-                if( entry == NULL){
-                    return -EINVAL;
-                }
-                out->egress_port_ids[i] = entry->global_port_index;
-            }
-        }
-
-    }
-    else {
-        //for drop action set first egress port to drop port id
-        ppr_port_entry_t *drop_port = ppr_find_port_byname(global_port_list, "drop_port");
-        if( drop_port == NULL){
-            return -EINVAL;
-        }
-        out->egress_port_ids[0] = drop_port->global_port_index;
-        out->egress_target_count = 1;
-    }
 
 
 

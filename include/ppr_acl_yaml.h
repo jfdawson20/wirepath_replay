@@ -5,13 +5,12 @@
 #include <stdbool.h>
 #include <cyaml/cyaml.h>
 
-#include "ppr_acl.h"    
+#include "ppr_acl.h"   
+#include "ppr_acl_db.h" 
 #include "ppr_ports.h"  
 
 typedef struct {
     char       *default_policy;   // "FORWARD" / "DROP" / etc.
-    char      **egress_ports;     // names
-    uint32_t    egress_ports_count;
 } ppr_yaml_acl_action_t;
 
 typedef struct {
