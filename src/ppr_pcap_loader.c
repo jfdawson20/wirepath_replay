@@ -242,7 +242,6 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     //perform ACL lookups into both tables if we have valid flow keys
     //lookup l2 action if we have a valid l2 flow key
     if(l2_flow_key && l2_flowkey_valid){
-        PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "Performing L2 ACL lookup\n");
         rc = ppr_acl_classify_l2(acl_runtime_ctx,
                                  l2_flow_key,
                                  &l2_acl_action);
@@ -255,7 +254,6 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
 
     //now L3 lookup if we have a valid ip flow key
     if(ip_flow_key && ip_flowkey_valid){
-        PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "Performing IP ACL lookup\n");
         rc = ppr_acl_classify_ip(acl_runtime_ctx,
                                  ip_flow_key,
                                  m->port,
@@ -271,7 +269,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     ppr_policy_action_t *selected_action = NULL;
     bool is_l2_action = false;
     if(l2_acl_action.hit && !ip_acl_action.hit){
-        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+        PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO,
                 "L2 ACL matched: applying action\n");
 
         selected_action = &l2_acl_action;
@@ -279,7 +277,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
 
     }
     else if (ip_acl_action.hit && !l2_acl_action.hit){
-        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+        PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO,
                 "IP ACL matched: applying action\n");
 
         selected_action = &ip_acl_action;
@@ -288,14 +286,14 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     else if (l2_acl_action.hit && ip_acl_action.hit){
         //both hit, choose by priority
         if (l2_acl_action.priority >= ip_acl_action.priority){
-            PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+            PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO,
                     "Both L2 and IP ACL matched: applying L2 action due to higher priority\n");
 
             selected_action = &l2_acl_action;
             is_l2_action = true;
         }
         else{
-            PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+            PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO,
                     "Both L2 and IP ACL matched: applying IP action due to higher priority\n");
 
             selected_action = &ip_acl_action;
@@ -304,7 +302,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     }
     else{
         //no hits
-        PPR_DP_LOG(PPR_LOG_DP, RTE_LOG_INFO,
+        PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO,
                 "No ACL match found\n");
         return;
     }
