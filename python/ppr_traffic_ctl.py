@@ -148,43 +148,93 @@ class PprTrafficClient:
 
 def display_ports(reply: Dict[str, Any]) -> None:
     """
-    Try to render port list no matter what the exact JSON shape is.
-    Common shapes seen in these systems:
-      - {"ports": [ {...}, {...} ]}
-      - {"port_list": [ ... ]}
-      - {"results": [ ... ]}
+    Render port list for replies shaped like:
+
+      {
+        "port_list": {
+          "port0": { ... },
+          "port1": { ... }
+        },
+        "status": "success"
+      }
+
+    Where port_list is a dict keyed by port name.
     """
-    ports = (
-        reply.get("ports")
-        or reply.get("port_list")
-        or reply.get("results")
-        or reply.get("data")
-        or []
-    )
-    ports = _as_list(ports)
+    port_list = reply.get("port_list", {})
 
     t = PrettyTable()
-    t.field_names = ["Port", "Type", "Port ID", "RXQ", "TXQ", "Link", "MTU", "Notes"]
+    t.field_names = [
+        "Port",
+        "Port ID",
+        "External",
+        "Dir",
+        "RXQs",
+        "TXQs",
+        "RXQ->Core",
+        "TXQ->Core",
+    ]
 
-    for p in ports:
+    if not isinstance(port_list, dict) or not port_list:
+        print("Ports: (none)")
+        # still show status if present
+        if "status" in reply:
+            print(f"status: {reply.get('status')}")
+        print("")
+        return
+
+    # stable ordering: port0, port1, ... if names match; otherwise lexicographic
+    def _sort_key(k: str):
+        if k.startswith("port") and k[4:].isdigit():
+            return (0, int(k[4:]))
+        return (1, k)
+
+    for port_name in sorted(port_list.keys(), key=_sort_key):
+        p = port_list.get(port_name, {})
         if not isinstance(p, dict):
-            t.add_row([str(p), "", "", "", "", "", "", ""])
+            t.add_row([port_name, "", "", "", "", "", "", ""])
             continue
 
-        name = p.get("name") or p.get("port") or p.get("port_name") or ""
-        ptype = p.get("type") or p.get("port_type") or ""
-        port_id = p.get("port_id", p.get("id", ""))
-        rxq = p.get("rxq", p.get("rx_queues", ""))
-        txq = p.get("txq", p.get("tx_queues", ""))
-        link = p.get("link") or p.get("link_status") or p.get("up") or ""
-        mtu = p.get("mtu", "")
-        notes = p.get("notes", "")
+        name = p.get("name", port_name)
+        port_id = p.get("port_id", "")
+        is_external = p.get("is_external", "")
+        direction = p.get("dir", "")
 
-        t.add_row([name, ptype, port_id, rxq, txq, link, mtu, notes])
+        total_rx = p.get("total_rx_queues", "")
+        total_tx = p.get("total_tx_queues", "")
+
+        # summarize queue->core mappings
+        rxq_map = []
+        for q in p.get("rx_queues", []) or []:
+            if not isinstance(q, dict):
+                continue
+            qi = q.get("queue_index", "")
+            core = q.get("assigned_worker_core", "")
+            rxq_map.append(f"{qi}:{core}")
+        txq_map = []
+        for q in p.get("tx_queues", []) or []:
+            if not isinstance(q, dict):
+                continue
+            qi = q.get("queue_index", "")
+            core = q.get("assigned_worker_core", "")
+            txq_map.append(f"{qi}:{core}")
+
+        t.add_row([
+            name,
+            port_id,
+            is_external,
+            direction,
+            total_rx,
+            total_tx,
+            ",".join(rxq_map),
+            ",".join(txq_map),
+        ])
 
     print("Ports:")
     print(t)
+    if "status" in reply:
+        print(f"\nstatus: {reply.get('status')}")
     print("")
+
 
 
 def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
