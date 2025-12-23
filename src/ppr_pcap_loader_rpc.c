@@ -202,6 +202,8 @@ int ppr_load_pcap_file(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
 **/
 int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args)
 {
+
+    PPR_LOG(PPR_LOG_RPC, RTE_LOG_INFO, "ppr_assign_port_slot called\n");   
     if (!reply_root || !args || !thread_args || !thread_args->pcap_storage || !thread_args->global_port_list) {
         PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to ppr_assign_port_slot\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
