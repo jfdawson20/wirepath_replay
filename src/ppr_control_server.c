@@ -74,18 +74,6 @@ const ppr_cmd_def_t ppr_cmd_table[] = {
         .args_schema = "{}",
         .handler     = ppr_cmd_mem_stats,
     },
-    {
-        .name        = "flowtable_stats",
-        .description = "Return flow table usage stats",
-        .args_schema = "{}",
-        .handler     = ppr_cmd_flowtable_stats,
-    },
-    {
-        .name        = "worker_stats",
-        .description = "Return per-worker core stats",
-        .args_schema = "{worker_id: str(worker_number)} // -1 for all workers",
-        .handler     = ppr_cmd_worker_stats,
-    },
     /* --------------------------------- ACL Table Commands ----------------------------------- */
     {
         .name        = "ppr_cmd_get_acl_db",

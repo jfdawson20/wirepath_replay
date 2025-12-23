@@ -335,6 +335,14 @@ void *run_pcap_loader_thread(void *arg) {
 
     pthread_mutex_lock(&ctl->lock);
 
+    //mark thread ready
+    atomic_store_explicit(&thread_args->thread_ready, true, memory_order_relaxed);
+
+    //wait for app ready flag from main thread
+    while (atomic_load_explicit(thread_args->app_ready, memory_order_relaxed) == false) {
+        rte_pause();
+    }
+
     while (1) {
         while (ctl->command == CMD_NONE) {
             pthread_cond_wait(&ctl->cond, &ctl->lock);

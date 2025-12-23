@@ -75,15 +75,15 @@ int main(int argc, char **argv) {
 
     int ppr_rc = 0; 
 
+    //app ready is an atomic bool used to signal worker threads when app init is complete and safe to start
+    _Atomic bool app_ready;
+    atomic_store_explicit(&app_ready, false, memory_order_relaxed);
 
     unsigned int main_lcore_id; 
     cpu_set_t cpuset; 
-    pthread_t controller_thread;
+    pthread_t control_server_thread;
     pthread_t stats_thread; 
     pthread_t pcap_loader_thread; 
-
-    struct rte_mempool *app_mempool             = NULL;
-    struct rte_mempool **core_clone_mempools    = NULL; 
 
     //start init, note we use PPR_LOG macro defined in ppr_log.h for all logging, this allows for different log levels and per module logging control
     PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\nPcap Replay Application Starting\n\n");
@@ -150,7 +150,8 @@ int main(int argc, char **argv) {
     }
     
 
-    unsigned int tx_cores     = ppr_app_cfg->thread_settings.tx_cores;
+    unsigned int tx_cores      = ppr_app_cfg->thread_settings.tx_cores;
+    unsigned int base_lcore_id = ppr_app_cfg->thread_settings.base_lcore_id;
 
     /* ------------------------- Configure DPDK RCU QSBR Struct ---------------------------------------------------*/
     //multiple subsystems in ppr use RCU QSBR for safe memory reclamation of deferred objects (e.g. retired flow actions, load balancer nodes, etc.)
@@ -293,7 +294,7 @@ int main(int argc, char **argv) {
         }
 
         //initialize port and record the number of rx/tx queues that were actually created
-        if (ppr_port_init(port_entry,dpdk_port_id, app_mempool, &port_init_cfg) != 0){
+        if (ppr_port_init(port_entry,dpdk_port_id, pcap_mempool, &port_init_cfg) != 0){
                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",dpdk_port_id);
         }
 
@@ -379,6 +380,22 @@ int main(int argc, char **argv) {
 
 
     /* -------------------------- Pcap Loader Init ----------------------------------------------- */
+    pcap_storage_t *global_pcap_storage = rte_zmalloc_socket("global_pcap_storage",
+                                        sizeof(pcap_storage_t),
+                                        RTE_CACHE_LINE_SIZE,
+                                        socket_id);
+    if (global_pcap_storage == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for global pcap storage\n");
+    }
+
+    pcap_loader_ctl_t *pcap_loader_ctl = rte_zmalloc_socket("pcap_loader_ctl",
+                                        sizeof(pcap_loader_ctl_t),
+                                        RTE_CACHE_LINE_SIZE,
+                                        socket_id);
+    if (pcap_loader_ctl == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for pcap loader controller\n");
+    }
+
 
     /* -------------------------- Build Tx Worker Contexts -----------------------------------------------*/
 
@@ -499,25 +516,267 @@ int main(int argc, char **argv) {
     /* -------------------------- Build and Launch Threads -----------------------------------------------*/
     
     /* Worker Tx Threads */
+    ppr_thread_args_t **tx_thread_args_array = rte_zmalloc_socket("tx_thread_args_array",
+                                                sizeof(ppr_thread_args_t *) * tx_cores,
+                                                RTE_CACHE_LINE_SIZE,
+                                                socket_id);
+    if (tx_thread_args_array == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for tx thread args array\n");
+    }
 
-    /* Stats pthread */
+    for (unsigned int core_idx = 0; core_idx < tx_cores; core_idx++){
+        tx_thread_args_array[core_idx] = rte_zmalloc_socket("tx_thread_args",
+                                                sizeof(ppr_thread_args_t),
+                                                RTE_CACHE_LINE_SIZE,
+                                                socket_id);
+        if (tx_thread_args_array[core_idx] == NULL){
+            rte_exit(EXIT_FAILURE, "Cannot allocate memory for tx thread args\n");
+        }   
 
-    /* Pcap Loader pthread */
+        //identifiers
+        tx_thread_args_array[core_idx]->core_id          = base_lcore_id + core_idx;
+        tx_thread_args_array[core_idx]->thread_index     = core_idx;
+        tx_thread_args_array[core_idx]->num_tx_cores     = tx_cores;
+        tx_thread_args_array[core_idx]->poll_period_ms   = 0;           //not used for tx worker 
+        atomic_store_explicit(&tx_thread_args_array[core_idx]->thread_ready, 0, memory_order_release);
+        tx_thread_args_array[core_idx]->app_ready        = &app_ready;
 
-    /* Control Server pthread */
+        //traffic gen control / status 
+        tx_thread_args_array[core_idx]->tx_worker_ctx           = tx_worker_ctx_array[core_idx];
+        tx_thread_args_array[core_idx]->port_stream_global_cfg  = port_stream_global_cfg;
+        tx_thread_args_array[core_idx]->mbuf_ts_off             = mbuf_time_offset;
 
-    /* -------------------------- Launch sevice pthreads that run on the main core ---------------------- */
+        //stats & control interfaces
+        tx_thread_args_array[core_idx]->global_port_list = global_port_list;
+        tx_thread_args_array[core_idx]->global_stats     = NULL;        //not used for tx worker
 
-    //Configure and Launch support pthreads on main core 
-    //pin pthreads to main core 
+        //pcap loader / storage interfaces 
+        tx_thread_args_array[core_idx]->pcap_controller  = NULL;        //not used for tx worker
+        tx_thread_args_array[core_idx]->pcap_storage     = global_pcap_storage;
+
+        //mempool pointers
+        tx_thread_args_array[core_idx]->pcap_template_mpool = pcap_mempool;
+        tx_thread_args_array[core_idx]->txcore_copy_mpools  = &copy_mempools[core_idx];
+
+        //QSBR Context
+        tx_thread_args_array[core_idx]->rcu_ctx          = NULL;       //not used for tx worker
+
+        //acl rules interface 
+        tx_thread_args_array[core_idx]->acl_runtime = &ppr_acl_runtime_ctx;
+        tx_thread_args_array[core_idx]->acl_rule_db = &ppr_acl_rules_db;
+    }
+
+    //launch non core 0 datapath cores
+    for (unsigned int thread_idx = 0; thread_idx < tx_cores; thread_idx++){
+        //launch core
+        rte_eal_remote_launch(run_tx_worker, &tx_thread_args_array[thread_idx], tx_thread_args_array[thread_idx]->core_id);
+        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\tLaunched worker core %d on lcore %d\n", thread_idx, tx_thread_args_array[thread_idx]->core_id);
+    }
+
+
+    /* Set main thread affinity to main lcore */
     CPU_ZERO(&cpuset);
     CPU_SET(main_lcore_id, &cpuset);
 
 
-    
-    /* -------------------------- Mark app as initialized, end of init thread until exit ------------------ */
+    /* Stats pthread */
+    ppr_thread_args_t *stats_thread_args = rte_zmalloc_socket("stats_thread_args",
+                                        sizeof(ppr_thread_args_t),
+                                        RTE_CACHE_LINE_SIZE,
+                                        socket_id);
+    if (stats_thread_args == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for stats thread args\n");
+    }
 
-    //mark app as initialized 
+    //identifiers
+    stats_thread_args->core_id          = 0;
+    stats_thread_args->thread_index     = 0;
+    stats_thread_args->num_tx_cores     = tx_cores;
+    stats_thread_args->poll_period_ms   = 500; 
+    atomic_store_explicit(&stats_thread_args->thread_ready, 0, memory_order_release);
+    stats_thread_args->app_ready        = &app_ready;
+
+    //traffic gen control / status 
+    stats_thread_args->tx_worker_ctx           = NULL;              //Not Used
+    stats_thread_args->port_stream_global_cfg  = NULL;              //Not Used
+    stats_thread_args->mbuf_ts_off             = 0;                 //Not Used
+
+    //stats & control interfaces
+    stats_thread_args->global_port_list = global_port_list;
+    stats_thread_args->global_stats     = NULL;        //to be implemented
+
+    //pcap loader / storage interfaces
+    stats_thread_args->pcap_controller  = NULL;         //Not Used
+    stats_thread_args->pcap_storage     = NULL;         //Not Used
+
+    //mempool pointers 
+    stats_thread_args->pcap_template_mpool = pcap_mempool; 
+    stats_thread_args->txcore_copy_mpools  = &copy_mempools[0];
+
+    //QSBR Context 
+    stats_thread_args->rcu_ctx          = rcu_ctx;
+
+    //acl rules interface
+    stats_thread_args->acl_runtime = &ppr_acl_runtime_ctx;
+    stats_thread_args->acl_rule_db = &ppr_acl_rules_db;
+
+
+    //launch stats thread and pin to core 0
+    if (pthread_create(&stats_thread, NULL, run_ppr_stats_thread, stats_thread_args) != 0){
+        rte_exit(EXIT_FAILURE, "stats thread creation failed\n");
+    }
+    if (pthread_setaffinity_np(stats_thread, sizeof(cpu_set_t), &cpuset) != 0){
+        rte_exit(EXIT_FAILURE, "pthread_setaffinity_np failed for stats monitor thread\n");
+    }
+
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\t Stats Manager thread launched on core %d\n", main_lcore_id);
+
+
+    /* Pcap Loader pthread */
+    ppr_thread_args_t *pload_thread_args = rte_zmalloc_socket("pload_thread_args",
+                                        sizeof(ppr_thread_args_t),
+                                        RTE_CACHE_LINE_SIZE,
+                                        socket_id);
+    if (pload_thread_args == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for pload thread args\n");
+    }
+
+    //identifiers
+    pload_thread_args->core_id          = 0;
+    pload_thread_args->thread_index     = 0;
+    pload_thread_args->num_tx_cores     = tx_cores;
+    pload_thread_args->poll_period_ms   = 500; 
+    atomic_store_explicit(&pload_thread_args->thread_ready, 0, memory_order_release);
+    pload_thread_args->app_ready        = &app_ready;
+
+    //traffic gen control / status 
+    pload_thread_args->tx_worker_ctx           = NULL;              //Not Used
+    pload_thread_args->port_stream_global_cfg  = NULL;              //Not Used
+    pload_thread_args->mbuf_ts_off             = 0;                 //Not Used
+
+    //pload & control interfaces
+    pload_thread_args->global_port_list = global_port_list;
+    pload_thread_args->global_stats     = NULL;        //to be implemented
+
+    //pcap loader / storage interfaces
+    pload_thread_args->pcap_controller  = NULL;         //Not Used
+    pload_thread_args->pcap_storage     = NULL;         //Not Used
+
+    //mempool pointers 
+    pload_thread_args->pcap_template_mpool = pcap_mempool; 
+    pload_thread_args->txcore_copy_mpools  = &copy_mempools[0];
+
+    //QSBR Context 
+    pload_thread_args->rcu_ctx          = rcu_ctx;
+
+    //acl rules interface
+    pload_thread_args->acl_runtime = &ppr_acl_runtime_ctx;
+    pload_thread_args->acl_rule_db = &ppr_acl_rules_db;
+
+    //launch stats thread and pin to core 0
+    if (pthread_create(&pcap_loader_thread, NULL, run_pcap_loader_thread, pload_thread_args) != 0){
+        rte_exit(EXIT_FAILURE, "pcap loader thread creation failed\n");
+    }
+    if (pthread_setaffinity_np(pcap_loader_thread, sizeof(cpu_set_t), &cpuset) != 0){
+        rte_exit(EXIT_FAILURE, "pthread_setaffinity_np failed for pcap loader monitor thread\n");
+    }
+
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\t Pcap Loader thread launched on core %d\n", main_lcore_id);
+
+
+    /* Control Server pthread */
+    ppr_thread_args_t *control_server_thread_args = rte_zmalloc_socket("control_server_thread_args",
+                                        sizeof(ppr_thread_args_t),
+                                        RTE_CACHE_LINE_SIZE,
+                                        socket_id);
+    if (control_server_thread_args == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for control server thread args\n");
+    }
+
+    //identifiers
+    control_server_thread_args->core_id          = 0;
+    control_server_thread_args->thread_index     = 0;
+    control_server_thread_args->num_tx_cores     = tx_cores;
+    control_server_thread_args->poll_period_ms   = 500; 
+    atomic_store_explicit(&control_server_thread_args->thread_ready, 0, memory_order_release);
+    control_server_thread_args->app_ready        = &app_ready;
+    //traffic gen control / status 
+    control_server_thread_args->tx_worker_ctx           = NULL;              //Not Used
+    control_server_thread_args->port_stream_global_cfg  = NULL;              //Not Used
+    control_server_thread_args->mbuf_ts_off             = 0;                 //Not Used
+
+    //pload & control interfaces
+    control_server_thread_args->global_port_list = global_port_list;
+    control_server_thread_args->global_stats     = NULL;        //to be implemented
+
+    //pcap loader / storage interfaces
+    control_server_thread_args->pcap_controller  = NULL;         //Not Used
+    control_server_thread_args->pcap_storage     = NULL;         //Not Used
+
+    //mempool pointers 
+    control_server_thread_args->pcap_template_mpool = pcap_mempool; 
+    control_server_thread_args->txcore_copy_mpools  = &copy_mempools[0];
+
+    //QSBR Context 
+    control_server_thread_args->rcu_ctx          = rcu_ctx;
+
+    //acl rules interface
+    control_server_thread_args->acl_runtime = &ppr_acl_runtime_ctx;
+    control_server_thread_args->acl_rule_db = &ppr_acl_rules_db;
+
+    //launch stats thread and pin to core 0
+    if (pthread_create(&control_server_thread, NULL, run_ppr_app_server_thread, control_server_thread_args) != 0){
+        rte_exit(EXIT_FAILURE, "control server thread creation failed\n");
+    }
+    if (pthread_setaffinity_np(control_server_thread, sizeof(cpu_set_t), &cpuset) != 0){
+        rte_exit(EXIT_FAILURE, "pthread_setaffinity_np failed for control server thread\n");
+    }
+
+    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\t Control Server thread launched on core %d\n", main_lcore_id);
+    
+    /* -------------------------- Wait for all threads to initialize ------------------- */
+    //now that we've launched all threads, we don't want to start accepting packets until everyone is ready. First we poll for each thread 
+    //to signal they've reached their init complete state. Then main singles back to all threads that they are clear to start running. 
+
+    //poll for all threads to be ready
+    bool is_app_ready = false;
+    while (is_app_ready == false && !force_quit && ppr_fatal_error == false) {
+        bool all_worker_ready = true;
+
+        //tx threads
+        for (unsigned int i=0; i < tx_cores; i++){
+            if (atomic_load_explicit(&tx_thread_args_array[i]->thread_ready, memory_order_relaxed) == false) {
+                all_worker_ready = false;
+                break;
+            }
+        }
+
+        //stats thread
+        if(atomic_load_explicit(&stats_thread_args->thread_ready, memory_order_relaxed) == false) {
+            all_worker_ready = false;
+        }
+
+        //pcap loader thread 
+        if(atomic_load_explicit(&pload_thread_args->thread_ready, memory_order_relaxed) == false) {
+            all_worker_ready = false;
+        }   
+        //control server 
+        if(atomic_load_explicit(&control_server_thread_args->thread_ready, memory_order_relaxed) == false) {
+            all_worker_ready = false;
+        }   
+
+        if (all_worker_ready) {
+            is_app_ready = true;
+
+        } else {    
+            rte_delay_us_sleep(100);
+        }
+    }
+
+
+    //now that all threads have ack'd they are ready, signal them to start processing via the global app_ready flag.
+    //local threads
+    atomic_store_explicit(&app_ready, true, memory_order_relaxed);
 
     //wait and clean up
     rte_eal_mp_wait_lcore();

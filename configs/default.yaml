@@ -9,7 +9,7 @@ app_settings:
 #wps application thread configuration
 thread_settings:
   tx_cores: 1
-  base_lcore_id: 0
+  base_lcore_id: 1
 
 #NIC port configuration / mapping
 port_settings: 

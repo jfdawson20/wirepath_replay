@@ -58,15 +58,13 @@ typedef struct ppr_thread_args{
     ppr_ports_t             *global_port_list;
     ppr_stats_all_t         *global_stats;
 
-    //pcap loader interface
+    //pcap loader / storage interfaces 
     pcap_loader_ctl_t       *pcap_controller;
-
     pcap_storage_t          *pcap_storage;
-    _Atomic uint32_t        *storage_epoch;   
 
     //mempool pointers
     struct rte_mempool      *pcap_template_mpool;
-    struct rte_mempool      **txcore_clone_mpools;
+    struct rte_mempool      **txcore_copy_mpools;
 
     //QSBR Context
     ppr_rcu_ctx_t              *rcu_ctx;
