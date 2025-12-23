@@ -477,7 +477,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         }
 
         if(!ip_flowkey_valid && !l2_flowkey_valid){
-            PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG, "No valid flow keys could be built for ACL lookup\n");
+            PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "No valid flow keys could be built for ACL lookup\n");
         }
         //process acl lookup and populate mbuf priv area
         process_acl_lookup(thread_args->acl_runtime,
