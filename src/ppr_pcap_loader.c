@@ -150,30 +150,37 @@ static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf,
                                       const uint8_t *src,
                                       uint32_t len)
 {
+    if (!pmbuf || !*pmbuf || !mp || (!src && len))
+        return -EINVAL;
+
     struct rte_mbuf *m = *pmbuf;
-    uint32_t remaining = len;
+    uint32_t off = 0;
 
-    while (remaining) {
+    while (off < len) {
         struct rte_mbuf *last = rte_pktmbuf_lastseg(m);
-        uint32_t tailroom = rte_pktmbuf_tailroom(last);
 
-        if (tailroom == 0) {
+        if (rte_pktmbuf_tailroom(last) == 0) {
             struct rte_mbuf *seg = rte_pktmbuf_alloc(mp);
             if (!seg) return -ENOMEM;
-            seg->next = NULL;
-            seg->data_len = 0;
-            last->next = seg;
-            m->nb_segs++;
-            last = seg;
-            tailroom = rte_pktmbuf_tailroom(last);
+
+            rte_pktmbuf_reset(seg);
+
+            if (rte_pktmbuf_chain(m, seg) != 0) {
+                rte_pktmbuf_free(seg);
+                return -ENOMEM;
+            }
+            continue;
         }
 
-        uint32_t to_copy = remaining < tailroom ? remaining : tailroom;
-        uint8_t *dst = rte_pktmbuf_mtod_offset(last, uint8_t *, last->data_len);
-        rte_memcpy(dst, src + (len - remaining), to_copy);
-        last->data_len += to_copy;
-        m->pkt_len   += to_copy;
-        remaining    -= to_copy;
+        uint32_t to_copy = len - off;
+        uint8_t *dst = rte_pktmbuf_append(m, to_copy);
+        if (!dst) {
+            /* not enough tailroom in last seg; allocate another seg */
+            continue;
+        }
+
+        rte_memcpy(dst, src + off, to_copy);
+        off += to_copy;
     }
 
     return 0;
@@ -266,10 +273,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             return -ENOMEM;
         }
 
-        m->data_len = 0;
-        m->pkt_len  = 0;
-        m->nb_segs  = 1;
-        m->next     = NULL;
+        rte_pktmbuf_reset(m);
 
         my_ts_set(m, thread_args->mbuf_ts_off, ns - first_ns);
 
