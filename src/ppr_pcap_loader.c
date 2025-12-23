@@ -227,7 +227,6 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
 {
 
     (void)acl_db; //unused for now
-    PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "Processing ACL lookup for mbuf %p\n", (void*)m);
     ppr_policy_action_t ip_acl_action = {0};
     ppr_policy_action_t l2_acl_action = {0};
 
@@ -243,6 +242,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     //perform ACL lookups into both tables if we have valid flow keys
     //lookup l2 action if we have a valid l2 flow key
     if(l2_flow_key && l2_flowkey_valid){
+        PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "Performing L2 ACL lookup\n");
         rc = ppr_acl_classify_l2(acl_runtime_ctx,
                                  l2_flow_key,
                                  &l2_acl_action);
@@ -255,6 +255,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
 
     //now L3 lookup if we have a valid ip flow key
     if(ip_flow_key && ip_flowkey_valid){
+        PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "Performing IP ACL lookup\n");
         rc = ppr_acl_classify_ip(acl_runtime_ctx,
                                  ip_flow_key,
                                  m->port,
