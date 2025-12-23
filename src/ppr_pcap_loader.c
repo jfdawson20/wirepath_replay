@@ -133,10 +133,10 @@ static void pcap_storage_free(struct pcap_storage *st) {
 
         if (slot->mbuf_array) {
             mbuf_array_free(slot->mbuf_array);
-            free(slot->mbuf_array);
+            rte_free(slot->mbuf_array);
             slot->mbuf_array = NULL;
         }
-        free(slot);
+        rte_free(slot);
 
         atomic_store_explicit(&st->slots[i], NULL, memory_order_relaxed);
     }
@@ -226,7 +226,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         pc = pcap_open_offline(filename, errbuf);
         if (!pc) {
             fprintf(stderr, "pcap open failed: %s\n", errbuf);
-            free(mbuff_array);
+            rte_free(mbuff_array);
             return -EINVAL;
         }
     }
@@ -238,7 +238,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         fprintf(stderr, "Unsupported link type (DLT=%d). Expected DLT_EN10MB.\n", dlt);
         pcap_close(pc);
         mbuf_array_free(mbuff_array);
-        free(mbuff_array);
+        rte_free(mbuff_array);
         return -ENOTSUP;
     }
 
@@ -262,7 +262,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             fprintf(stderr, "mbuf alloc failed (rte_errno=%d)\n", rte_errno);
             pcap_close(pc);
             mbuf_array_free(mbuff_array);
-            free(mbuff_array);
+            rte_free(mbuff_array);
             return -ENOMEM;
         }
 

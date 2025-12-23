@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
     _Atomic bool app_ready;
     atomic_store_explicit(&app_ready, false, memory_order_relaxed);
 
-    unsigned int main_lcore_id; 
+    unsigned int main_lcore_id=0; 
     cpu_set_t cpuset; 
     pthread_t control_server_thread;
     pthread_t stats_thread; 
