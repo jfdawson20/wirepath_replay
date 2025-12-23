@@ -558,7 +558,7 @@ int main(int argc, char **argv) {
 
         //QSBR Context
         tx_thread_args_array[core_idx]->rcu_ctx          = NULL;       //not used for tx worker
-
+`
         //acl rules interface 
         tx_thread_args_array[core_idx]->acl_runtime = &ppr_acl_runtime_ctx;
         tx_thread_args_array[core_idx]->acl_rule_db = &ppr_acl_rules_db;
@@ -567,7 +567,7 @@ int main(int argc, char **argv) {
     //launch non core 0 datapath cores
     for (unsigned int thread_idx = 0; thread_idx < tx_cores; thread_idx++){
         //launch core
-        rte_eal_remote_launch(run_tx_worker, &tx_thread_args_array[thread_idx], tx_thread_args_array[thread_idx]->core_id);
+        rte_eal_remote_launch(run_tx_worker, tx_thread_args_array[thread_idx], tx_thread_args_array[thread_idx]->core_id);
         PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\tLaunched worker core %d on lcore %d\n", thread_idx, tx_thread_args_array[thread_idx]->core_id);
     }
 
