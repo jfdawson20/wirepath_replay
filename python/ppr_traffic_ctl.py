@@ -384,7 +384,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- assign ----
     p_asg = sp.add_parser("assign", help="Assign a loaded pcap slot to a port for replay")
-    p_asg.add_argument("--port", required=True, help="Port name")
+    p_asg.add_argument("--portname", required=True, help="Port name")
+
     p_asg.add_argument("--slotid", required=True, type=int, help="Loaded pcap slot id")
 
     # allow either numeric or string mode
@@ -451,7 +452,7 @@ def main() -> int:
             start_mode = _resolve_start_mode(args.start_mode)
 
             reply = traffic.assign_port_slot(
-                port=args.port,
+                port=args.portname,
                 slotid=args.slotid,
                 pace_mode=pace_mode,
                 start_mode=start_mode,
