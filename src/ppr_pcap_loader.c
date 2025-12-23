@@ -432,6 +432,9 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
         //reset so we have a clean priv area
         rte_pktmbuf_reset(m);
 
+        //set port to port 0 for now; actual port will be set by tx worker
+        m->port = 0;
+
         //set the timestamp 
         my_ts_set(m, thread_args->mbuf_ts_off, ns - first_ns);
 
