@@ -21,6 +21,9 @@ Description:
 #include "ppr_pcap_loader_rpc.h"
 #include "ppr_pcap_loader.h"
 #include "ppr_app_defines.h"
+#include "ppr_ports.h"
+#include "ppr_tx_worker.h"
+#include "ppr_log.h"
 
 
 /* --- Internal helpers --- */
@@ -187,3 +190,143 @@ int ppr_load_pcap_file(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
 
     return 0;
 }
+
+
+/** 
+* Take a pcap slot ID assigned by the user and assign it to a port core for replay.
+* @param thread_args
+*   Pointer to the thread args structure.
+* @param result
+*   Pointer to integer to store result code (0=success, negative=error).
+**/
+int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args)
+{
+    if (!reply_root || !args || !thread_args || !thread_args->pcap_storage || !thread_args->global_port_list) {
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    pcap_storage_t *st = thread_args->pcap_storage;
+    ppr_ports_t *port_list = thread_args->global_port_list;
+
+    //extract port number from command
+    json_t *jportname = json_object_get(args, "port");
+    if (!jportname) {
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+    const char *portname = json_string_value (jportname);
+
+
+    //validate port entry exists
+    ppr_port_entry_t *port_entry = ppr_find_port_byname(port_list, portname);
+    if (!port_entry) {
+        json_object_set_new(reply_root, "status", json_integer(-ENOENT));
+        return -ENOENT;
+    }
+
+    //extract slot id from command
+    json_t *jslotid = json_object_get(args, "slotid");
+    if (!jslotid) {
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+    int slotid = (int)json_integer_value(jslotid);
+
+    //validate slot exists
+    uint32_t max_published_slots = atomic_load_explicit(&st->published_count, memory_order_acquire);
+    if ((uint32_t)slotid >= max_published_slots) {
+        json_object_set_new(reply_root, "status", json_integer(-ENOENT));
+        return -ENOENT;
+    }
+
+    //get pointer to slot entry 
+    pcap_mbuff_slot_t *slot_entry = atomic_load_explicit(&st->slots[slotid], memory_order_acquire);
+    if (slot_entry == NULL) {
+        json_object_set_new(reply_root, "status", json_integer(-ENOENT));
+        return -ENOENT;
+    }
+
+    //extract pace mode from command 
+    json_t *jpace_mode = json_object_get(args, "pace_mode");
+    ppr_vc_pace_mode_t pace_mode = VC_PACE_NONE;
+    if (jpace_mode) {
+        pace_mode = (ppr_vc_pace_mode_t)json_integer_value(jpace_mode);
+    }
+    else { 
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "No pace mode provided, defaulting to VC_PACE_NONE\n");
+    }
+
+    //extract start mode from command
+    json_t *jstart_mode = json_object_get(args, "start_mode");
+    ppr_vc_start_mode_t start_mode = VC_START_FIXED_INDEX; //default
+    uint32_t start_index = 0;
+    if (jstart_mode) {
+        start_mode = (ppr_vc_start_mode_t)json_integer_value(jstart_mode);
+
+        //if start mode is fixed index, extract fixed index value
+        if (start_mode == VC_START_FIXED_INDEX){
+            json_t *jfixed_index = json_object_get(args, "fixed_index");
+            if (jfixed_index) {
+                start_index = (uint32_t)json_integer_value(jfixed_index);
+            }
+            else {
+                PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "No fixed index provided for VC_START_FIXED_INDEX mode, default to 0\n");
+            }
+        }
+    }
+    else {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "No start mode provided, defaulting to VC_START_FIXED_INDEX - 0\n");   
+    }
+
+    if (start_mode == VC_START_FIXED_INDEX && start_index >= slot_entry->numpackets){
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: fixed index %u is out of bounds for pcap slot %d with %u packets\n", 
+                start_index, slotid, (unsigned int)slot_entry->numpackets);
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    //extract the replay window in seconds - only used for paced modes
+    json_t *jreplay_window_sec = json_object_get(args, "replay_window_sec");
+    uint32_t replay_window_sec = 0;
+    if (jreplay_window_sec) {
+        replay_window_sec = (uint32_t)json_integer_value(jreplay_window_sec);
+    }
+
+    if (pace_mode == VC_PACE_PCAP_TS && replay_window_sec == 0){
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: replay window must be > 0 for VC_PACE_PCAP_TS mode\n");
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    //we now have the slot index and port entry. 
+    uint16_t global_port_index = port_entry->global_port_index;
+
+    //1) first disable tx on the port 
+    atomic_store_explicit(&port_entry->tx_enabled, false, memory_order_release); 
+
+    //2) assign the slot to the global port stream
+    ppr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
+    if(port_streams == NULL){
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    atomic_store_explicit(&port_streams[global_port_index].slot_id, (uint32_t)slotid, memory_order_release);
+
+    //3) set pace and start mode and start index 
+    port_streams[global_port_index].pace_mode = pace_mode;
+    port_streams[global_port_index].start_mode = start_mode;
+    port_streams[global_port_index].stream_start_index = start_index;
+
+    //4) set the replay window in ns
+    port_streams[global_port_index].replay_window_ns = (uint64_t)replay_window_sec * 1000000000ULL;
+
+    //5) set the global start time to 0 for now, it gets set when tx is enabled and first packet is sent
+    port_streams[global_port_index].global_start_ns = 0;
+
+    json_object_set_new(reply_root, "status", json_integer(0));
+    return 0;  
+}
+
+

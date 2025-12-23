@@ -35,6 +35,8 @@ Description:
 #include <stdatomic.h>
 #include <stdlib.h>
 
+#include "rte_malloc.h"
+
 #include "ppr_pcap_loader.h"
 #include "ppr_app_defines.h"
 #include "ppr_mbuf_fields.h"
@@ -54,7 +56,7 @@ static void mbuf_array_init(struct mbuf_array *arr) {
 static void mbuf_array_push(struct mbuf_array *arr, struct rte_mbuf *m) {
     if (arr->count == arr->capacity) {
         size_t newcap = (arr->capacity == 0) ? 1024 : arr->capacity * 2;
-        struct rte_mbuf **newpkts = realloc(arr->pkts, newcap * sizeof(*newpkts));
+        struct rte_mbuf **newpkts = rte_realloc(arr->pkts, newcap * sizeof(*newpkts), RTE_CACHE_LINE_SIZE);
         if (!newpkts) {
             perror("realloc failed");
             exit(EXIT_FAILURE);
@@ -71,14 +73,14 @@ static void mbuf_array_free(struct mbuf_array *arr) {
         if (arr->pkts[i])
             rte_pktmbuf_free(arr->pkts[i]);
     }
-    free(arr->pkts);
+    rte_free(arr->pkts);
     arr->pkts = NULL;
     arr->count = 0;
     arr->capacity = 0;
 
     /* If you later allocate these arrays, free them here too */
-    free((void*)arr->cap_ts_us);
-    free((void*)arr->action_id);
+    rte_free((void*)arr->cap_ts_us);
+    rte_free((void*)arr->action_id);
     arr->cap_ts_us = NULL;
     arr->action_id = NULL;
 }
@@ -213,7 +215,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     }
 
     /* Build mbuf array privately */
-    struct mbuf_array *mbuff_array = calloc(1, sizeof(*mbuff_array));
+    struct mbuf_array *mbuff_array = rte_zmalloc("mbuf_array", sizeof(*mbuff_array), RTE_CACHE_LINE_SIZE);
     if (!mbuff_array) return -ENOMEM;
     mbuf_array_init(mbuff_array);
 
@@ -275,7 +277,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             rte_pktmbuf_free(m);
             pcap_close(pc);
             mbuf_array_free(mbuff_array);
-            free(mbuff_array);
+            rte_free(mbuff_array);
             return -ENOMEM;
         }
 
@@ -285,10 +287,10 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     pcap_close(pc);
 
     /* Build the slot privately */
-    struct pcap_mbuff_slot *slot = calloc(1, sizeof(*slot));
+    struct pcap_mbuff_slot *slot = rte_zmalloc("pcap_mbuff_slot", sizeof(*slot), RTE_CACHE_LINE_SIZE);
     if (!slot) {
         mbuf_array_free(mbuff_array);
-        free(mbuff_array);
+        rte_free(mbuff_array);
         return -ENOMEM;
     }
 

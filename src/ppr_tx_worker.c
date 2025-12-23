@@ -303,13 +303,13 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
         if (!tmpl) break;
 
         //if we are pacing based on pcap timestamps, check if this packet is due yet
-        if (psc->pace_mode == VC_PACE_PCAP_TS) {
+        if (psc->global_cfg->pace_mode == VC_PACE_PCAP_TS) {
             uint64_t rel_ts = my_ts_get(tmpl, mbuf_ts_off);
             if (unlikely(rel_ts < vc->base_rel_ns)) {
                 break; // end VC for this epoch
             }
             uint64_t rel = rel_ts - vc->base_rel_ns;  
-            uint64_t pkt_phase = (vc->start_offset_ns + rel) % psc->replay_window_ns;
+            uint64_t pkt_phase = (vc->start_offset_ns + rel) % psc->global_cfg->replay_window_ns;
             if (pkt_phase > phase) 
                 break; // not time yet
 
@@ -382,36 +382,101 @@ int run_tx_worker(__rte_unused void *arg) {
             }
 
             /* ---------------------------------- Get per port stream context and validate it ----------------------*/
-            uint16_t port_id     = port_entry->port_id;
-            uint16_t tx_queue_id = tx_worker_ctx->queue_id_by_port[port_idx];
+            uint16_t dpdk_port_id = port_entry->port_id;
+            uint16_t tx_queue_id  = tx_worker_ctx->queue_id_by_port[port_idx];
+            
             ppr_port_stream_ctx_t *port_stream_ctx = &tx_worker_ctx->port_stream[port_idx];
+            ppr_port_stream_global_t *g = port_stream_ctx->global_cfg;
 
-            uint32_t slot_id = atomic_load_explicit(&port_stream_ctx->slot_id, memory_order_acquire);
+            if(!port_stream_ctx || !g){
+                PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Invalid port stream context for port index %u\n", port_idx);
+                continue;
+            }
+
+            //load slot id for this port stream
+            uint32_t slot_id = atomic_load_explicit(&g->slot_id, memory_order_acquire);
             if (slot_id == UINT32_MAX) {
                 PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG, "No pcap slot assigned for port index %u\n", port_idx);
                 continue;
             }
 
-            uint64_t elapsed    = now_ns - port_stream_ctx->global_start_ns;
+            uint64_t elapsed    = now_ns - atomic_load_explicit(&g->global_start_ns, memory_order_acquire);
             uint64_t epoch      = 0;
             uint64_t phase      = 0;
 
             //figure out our epoch and phase for this stream context
-            if (port_stream_ctx->pace_mode == VC_PACE_PCAP_TS) {
-                uint64_t w = port_stream_ctx->replay_window_ns;
+            if (g->pace_mode == VC_PACE_PCAP_TS) {
+                uint64_t w = g->replay_window_ns;
                 if (unlikely(w == 0)) {
                     PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Replay window ns is 0 for port index %u\n", port_idx);
                     continue;
                 }
                 
-                epoch = elapsed / port_stream_ctx->replay_window_ns;
-                phase = elapsed % port_stream_ctx->replay_window_ns;
+                epoch = elapsed / g->replay_window_ns;
+                phase = elapsed % g->replay_window_ns;
 
             }
     
-
-
             /* ---------------------------------- Iterate over all virtual clients for this port ----------------------*/
+            
+            /* Total active VCs for this port stream */
+            uint32_t N = atomic_load_explicit(&g->active_clients, memory_order_acquire);
+            if (N == 0) {
+                port_stream_ctx->num_clients = 0;
+                continue;
+            }
+
+            /* Workers serving this port + my rank among them */
+            ppr_port_worker_map_t map = tx_worker_ctx->map_by_port[port_idx];
+            uint16_t W = map.W;
+            uint16_t rank = map.rank;
+
+            if (W == 0 || rank >= W) {
+                /* misconfigured mapping */
+                continue;
+            }
+
+            /* Compute my slice */
+            uint32_t start_gid = 0, count = 0;
+            ppr_vc_slice(N, W, rank, &start_gid, &count);
+
+            if (count > MAX_VC_PER_WORKER) {
+                /* either clamp or treat as config error */
+                count = MAX_VC_PER_WORKER;
+            }
+
+            /* If slice changed, remap local slots to the new global IDs */
+            if (port_stream_ctx->last_start_gid != start_gid || port_stream_ctx->last_count != count) {
+
+                for (uint32_t i = 0; i < count; i++) {
+                    uint32_t gid = start_gid + i;
+                    ppr_vc_ctx_t *vc = &port_stream_ctx->clients[i];
+
+                    if (vc->global_client_id != gid) {
+                        vc_materialize_identity(vc, &g->idp, port_idx, gid);
+
+                        /* Reset pacing state (simple semantics) */
+                        vc->epoch = 0;
+                        vc->flow_epoch = 0;
+
+                        /* You MUST also ensure start_idx/start_offset/base_rel_ns are set appropriately.
+                        If you already have per-VC init logic, call it here.
+                        Minimal safe defaults:
+                        */
+                        vc->start_idx = 0;
+                        vc->pcap_idx = 0;
+                        vc->start_offset_ns = 0;
+                        vc->base_rel_ns = 0;
+                    }
+                }
+
+                port_stream_ctx->rr_next_client = 0;
+                port_stream_ctx->last_start_gid = start_gid;
+                port_stream_ctx->last_count = count;
+            }
+
+            port_stream_ctx->num_clients = count;
+
             uint32_t nclients = port_stream_ctx->num_clients;
             if (nclients == 0) 
                 continue;
@@ -423,7 +488,7 @@ int run_tx_worker(__rte_unused void *arg) {
                 uint32_t vc_idx = (start + k) % nclients;
                 ppr_vc_ctx_t *vc = &port_stream_ctx->clients[vc_idx];
 
-                if (vc->epoch != epoch && port_stream_ctx->pace_mode == VC_PACE_PCAP_TS) {
+                if (vc->epoch != epoch && g->pace_mode == VC_PACE_PCAP_TS) {
                     vc->epoch = epoch;
                     vc->pcap_idx = vc->start_idx;
                     vc->flow_epoch++; 
@@ -435,7 +500,7 @@ int run_tx_worker(__rte_unused void *arg) {
                                             port_stream_ctx, vc, phase);
 
                 if (nb) {
-                    uint16_t sent = rte_eth_tx_burst(port_id, tx_queue_id, tx_pkts, nb);
+                    uint16_t sent = rte_eth_tx_burst(dpdk_port_id, tx_queue_id, tx_pkts, nb);
                     for (uint16_t i = sent; i < nb; i++)
                         rte_pktmbuf_free(tx_pkts[i]);
                 }

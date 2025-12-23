@@ -36,7 +36,7 @@ typedef struct ppr_stats_all            ppr_stats_all_t;
 typedef struct pcap_loader_ctl          pcap_loader_ctl_t;
 typedef struct pcap_storage             pcap_storage_t;
 typedef struct ppr_tx_worker_ctx        ppr_tx_worker_ctx_t;
-
+typedef struct ppr_port_stream_global   ppr_port_stream_global_t;
 
 /* per thread struct with globals */
 typedef struct ppr_thread_args{
@@ -50,10 +50,9 @@ typedef struct ppr_thread_args{
     _Atomic  bool           thread_ready;    //written by thread, read by main, one per thread
 
     //traffic gen control/status
-    ppr_tx_worker_ctx_t      *tx_worker_ctx;
+    ppr_tx_worker_ctx_t      *tx_worker_ctx; //used by tx workers only
+    ppr_port_stream_global_t *port_stream_global_cfg; //pointer to list of global port stream configs
     int                      mbuf_ts_off;
-
-
 
     //stats & control structs
     ppr_ports_t             *global_port_list;

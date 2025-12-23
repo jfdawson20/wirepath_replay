@@ -32,6 +32,8 @@ Description: header file for tx worker code
 #define CACHE_LINE 64
 #define BURST_SIZE_MAX  256
 
+#define MAX_VC_PER_WORKER 8192
+
 /* ------------------------------- Virtual Client Structs ---------------------------------------- */
 
 //how to set the start time for a virtual client
@@ -90,29 +92,50 @@ typedef struct __attribute__((aligned(CACHE_LINE))) ppr_vc_ctx {
 } ppr_vc_ctx_t;
 
 
-typedef struct __attribute__((aligned(64))) ppr_port_stream_ctx {
-    // which PCAP slot this port is currently assigned
-    _Atomic uint32_t slot_id;     // UNASSIGNED means idle
-    uint32_t last_seen_epoch;     // to detect slot changes (or use per-port epoch)
+//map workers to ports they serve
+typedef struct ppr_port_worker_map {
+    uint16_t W;       // workers serving this port
+    uint16_t rank;    // my rank within those workers [0..W-1]
+} ppr_port_worker_map_t;
 
+
+//handle coordination of port streams and their virtual clients across all workers
+typedef struct ppr_port_stream_global {
+    //how many vc clients are active on this port
+    _Atomic uint32_t active_clients; 
+
+    // which PCAP slot this port is currently assigned
+    _Atomic uint32_t slot_id;     // UINT32T_MAX means idle
+
+    uint32_t max_clients;
+    uint64_t run_seed;
+
+    // per-port VC config 
+    ppr_vc_pace_mode_t pace_mode;
+    ppr_vc_start_mode_t start_mode;
+    uint32_t stream_start_index; // for FIXED_INDEX mode
+
+
+    // global start ns time for relative pcap timestamps
+    _Atomic uint64_t global_start_ns;
+    uint64_t replay_window_ns;    // period
+
+    ppr_vc_identity_profile_t idp;
+} ppr_port_stream_global_t;
+
+
+typedef struct __attribute__((aligned(64))) ppr_port_stream_ctx {
     // virtual clients for THIS port stream
     ppr_vc_ctx_t *clients;
     uint32_t num_clients;
+    uint32_t last_start_gid;
+    uint32_t last_count;
 
-    // per-port VC config (can differ per port)
-    uint32_t clients_per_worker;
-    uint16_t copies_per_template_pkt;
-    ppr_vc_pace_mode_t pace_mode;
-    ppr_vc_start_mode_t start_mode;
-    ppr_vc_identity_profile_t idp;
+    //global port stream config pointer
+    ppr_port_stream_global_t *global_cfg;
 
     // pacing / scheduling knobs
     uint32_t rr_next_client;      // round-robin pointer
-    uint64_t stream_seed_salt;    // derived from run_seed ^ port_id (optional)
-
-    // global start ns time for relative pcap timestamps
-    uint64_t global_start_ns;
-    uint64_t replay_window_ns;    // period
 } ppr_port_stream_ctx_t;
 
 
@@ -120,19 +143,94 @@ typedef struct __attribute__((aligned(64))) ppr_tx_worker_ctx {
     uint32_t worker_id;
     uint64_t run_seed;
 
-    // ports this worker services
-    uint16_t ports[MAX_PORTS];         // or a small vector
+    // number of ports this worker serves
     uint16_t num_ports;
 
     // one stream ctx per port-id for O(1)
     ppr_port_stream_ctx_t port_stream[MAX_PORTS];
-
-    // tx resources (if you truly do one queue per port per worker, store per port)
-    struct rte_mempool *tx_pool;
+    ppr_port_worker_map_t map_by_port[MAX_PORTS];
     uint16_t queue_id_by_port[MAX_PORTS];
+    
+    struct rte_mempool *tx_pool;
+
 
     const void *action_table;
 } ppr_tx_worker_ctx_t;
+
+
+/** 
+* Slice N items among W workers, returning start index and count for given rank
+* @param N Total number of items    
+* @param W Total number of workers
+* @param rank Rank of this worker [0..W-1]
+* @param start Pointer to store start index
+* @param count Pointer to store count of items for this worker
+**/
+static inline void ppr_vc_slice(uint32_t N, uint16_t W, uint16_t rank,
+                            uint32_t *start, uint32_t *count)
+{
+    uint32_t base = (W ? (N / W) : 0);
+    uint32_t rem  = (W ? (N % W) : 0);
+
+    uint32_t c = base + ((uint32_t)rank < rem ? 1u : 0u);
+    uint32_t s = (uint32_t)rank * base + ((uint32_t)rank < rem ? (uint32_t)rank : rem);
+
+    *start = s;
+    *count = c;
+}
+
+static inline uint32_t span_u32(uint32_t lo, uint32_t hi) {
+    return (hi >= lo) ? (hi - lo + 1) : 1;
+}
+static inline uint32_t span_u16(uint16_t lo, uint16_t hi) {
+    return (hi >= lo) ? (uint32_t)(hi - lo + 1) : 1;
+}
+
+static inline void vc_materialize_identity(ppr_vc_ctx_t *vc,
+                                           const ppr_vc_identity_profile_t *idp,
+                                           uint16_t port_id,          // optional: salt uniqueness per port
+                                           uint32_t global_vc_id)
+{
+    uint32_t id = global_vc_id;
+
+    vc->global_client_id = id;
+
+    /* ---- IPs: unique if span >= max ---- */
+    uint32_t sspan = span_u32(idp->src_ip_lo, idp->src_ip_hi);
+    uint32_t dspan = span_u32(idp->dst_ip_lo, idp->dst_ip_hi);
+
+    vc->src_ip = idp->src_ip_lo + (id % sspan);
+    vc->dst_ip = idp->dst_ip_lo + (id % dspan);
+
+    /* ---- Ports: unique if span >= max ---- */
+    uint32_t psspan = span_u16(idp->src_port_lo, idp->src_port_hi);
+    uint32_t pdspan = span_u16(idp->dst_port_lo, idp->dst_port_hi);
+
+    vc->src_port = (uint16_t)(idp->src_port_lo + (id % psspan));
+    vc->dst_port = (uint16_t)(idp->dst_port_lo + (id % pdspan));
+
+    /* ---- MACs: base + stride * id ---- */
+    memcpy(vc->src_mac, idp->src_mac_base, 6);
+    memcpy(vc->dst_mac, idp->dst_mac_base, 6);
+
+    uint32_t add = idp->mac_stride * id;
+
+    uint32_t tail;
+    memcpy(&tail, &vc->src_mac[2], 4);
+    tail = rte_be_to_cpu_32(tail) + add;
+    tail = rte_cpu_to_be_32(tail);
+    memcpy(&vc->src_mac[2], &tail, 4);
+
+    memcpy(&tail, &vc->dst_mac[2], 4);
+    tail = rte_be_to_cpu_32(tail) + add;
+    tail = rte_cpu_to_be_32(tail);
+    memcpy(&vc->dst_mac[2], &tail, 4);
+
+    (void)port_id; /* if unused */
+}
+
+
+
 /* ----------------------- Inlined helper functions for virtual client field selection -------------------------------------- */
 
 /** 

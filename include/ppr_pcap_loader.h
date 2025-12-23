@@ -69,9 +69,8 @@ typedef struct pcap_mbuff_slot {
 
 
 typedef struct pcap_storage {
-    _Atomic(struct pcap_mbuff_slot*) slots[PPR_MAX_PCAP_SLOTS];
+    _Atomic(pcap_mbuff_slot_t *) slots[PPR_MAX_PCAP_SLOTS];
     _Atomic uint32_t published_count;
-    unsigned int **slot_assignments; // keep if you want, but don't realloc it live
 } pcap_storage_t;
 
 

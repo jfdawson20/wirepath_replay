@@ -15,6 +15,7 @@ Description:
 #include <time.h>
 #include <jansson.h>
 #include <stdbool.h>
+#include <math.h> 
 #include <cyaml/cyaml.h>
 
 #include <rte_eal.h>
@@ -379,7 +380,121 @@ int main(int argc, char **argv) {
 
     /* -------------------------- Pcap Loader Init ----------------------------------------------- */
 
+    /* -------------------------- Build Tx Worker Contexts -----------------------------------------------*/
 
+    //create an array to hold all tx worker contexts
+    ppr_tx_worker_ctx_t **tx_worker_ctx_array = rte_zmalloc_socket("tx_worker_ctx_array",
+                                                sizeof(ppr_tx_worker_ctx_t *) * tx_cores,
+                                                RTE_CACHE_LINE_SIZE,
+                                                socket_id);
+
+    if(tx_worker_ctx_array == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for tx worker context array\n");
+    }
+
+    //create a per port global stream config array
+    ppr_port_stream_global_t *port_stream_global_cfg = rte_zmalloc_socket("port_stream_global_cfg",
+                                                sizeof(ppr_port_stream_global_t) * global_port_list->num_ports,
+                                                RTE_CACHE_LINE_SIZE,
+                                                socket_id);
+    if (port_stream_global_cfg == NULL){
+        rte_exit(EXIT_FAILURE, "Cannot allocate memory for port stream global config array\n");
+    }
+
+    for (unsigned int port_idx = 0; port_idx < global_port_list->num_ports; port_idx++){
+        ppr_port_stream_global_t *g = &port_stream_global_cfg[port_idx];
+        g->max_clients = tx_cores * MAX_VC_PER_WORKER;
+        g->run_seed = 0; 
+        atomic_store_explicit(&g->active_clients, 1, memory_order_release);
+        atomic_store_explicit(&g->slot_id, UINT32_MAX, memory_order_release); //no slot assigned yet
+
+        g->pace_mode = VC_PACE_NONE;
+        g->start_mode = VC_START_FIXED_INDEX;
+
+        g->global_start_ns = 0;
+        g->replay_window_ns = 0;
+
+        //initialize the idp struct
+        // src: 10.(port_idx).0.1  .. 10.(port_idx).255.254
+        g->idp.src_ip_lo = RTE_IPV4(10, port_idx & 0xFF, 0, 1);
+        g->idp.src_ip_hi = RTE_IPV4(10, port_idx & 0xFF, 255, 254);
+
+        // src: 11.(port_idx).0.1  .. 11.(port_idx).255.254
+        g->idp.dst_ip_lo = RTE_IPV4(11, port_idx & 0xFF, 0, 1);
+        g->idp.dst_ip_hi = RTE_IPV4(11, port_idx & 0xFF, 255, 254);
+        
+        // ports: 49152 - 65535 ephemeral range
+        g->idp.src_port_lo = 49152;
+        g->idp.src_port_hi = 65535;
+
+        //this will probably not be used, but set to some value
+        g->idp.dst_port_lo = 0;
+        g->idp.dst_port_hi = 500;
+        
+        g->idp.src_mac_base[0] = 0x02;  // LAA + unicast
+        g->idp.src_mac_base[1] = port_idx;
+        g->idp.src_mac_base[2] = 0x00;
+        g->idp.src_mac_base[3] = 0x00;
+        g->idp.src_mac_base[4] = 0x00;
+        g->idp.src_mac_base[5] = 0x00;
+
+        g->idp.dst_mac_base[0] = 0x02;
+        g->idp.dst_mac_base[1] = 0x11;
+        g->idp.dst_mac_base[2] = 0x00;
+        g->idp.dst_mac_base[3] = 0x00;
+        g->idp.dst_mac_base[4] = 0x00;
+        g->idp.dst_mac_base[5] = 0x00;
+
+        g->idp.mac_stride = 1;
+    }   
+
+
+    //create and initialize each worker context 
+    for (unsigned int core_idx = 0; core_idx < tx_cores; core_idx++){
+        tx_worker_ctx_array[core_idx] = rte_zmalloc_socket("ppr_tx_worker_ctx",
+                                                sizeof(ppr_tx_worker_ctx_t),
+                                                RTE_CACHE_LINE_SIZE,
+                                                socket_id);
+        if (tx_worker_ctx_array[core_idx] == NULL){
+            rte_exit(EXIT_FAILURE, "Cannot allocate memory for tx worker context\n");
+        }
+
+        tx_worker_ctx_array[core_idx]->worker_id             = core_idx;
+        tx_worker_ctx_array[core_idx]->run_seed              = 0;
+        tx_worker_ctx_array[core_idx]->num_ports             = global_port_list->num_ports;
+
+        for (unsigned int port_idx = 0; port_idx < global_port_list->num_ports; port_idx++){
+            
+            //initialize per worker/port stream context
+            ppr_port_stream_ctx_t *port_stream = &tx_worker_ctx_array[core_idx]->port_stream[port_idx];
+            port_stream->clients = rte_zmalloc("ppr_vc_ctx_array",
+                                        sizeof(ppr_vc_ctx_t) * MAX_VC_PER_WORKER,
+                                        RTE_CACHE_LINE_SIZE);
+            if (port_stream->clients == NULL){
+                rte_exit(EXIT_FAILURE, "Cannot allocate memory for virtual client context array\n");
+            }
+ 
+            port_stream->num_clients = 0;
+            port_stream->last_start_gid = UINT32_MAX;
+            port_stream->last_count = UINT32_MAX;
+            port_stream->global_cfg = &port_stream_global_cfg[port_idx];
+            port_stream->rr_next_client = 0;
+
+
+            //initialize port map per worker 
+            ppr_port_worker_map_t *map = &tx_worker_ctx_array[core_idx]->map_by_port[port_idx];
+            map->W = tx_cores;
+            map->rank = core_idx;
+
+            //every worker needs its own queue for tx 
+            uint16_t *queue_id_by_port = &tx_worker_ctx_array[core_idx]->queue_id_by_port[port_idx];
+            *queue_id_by_port = core_idx;
+
+        }
+
+        //assign this workers copy mempool 
+        tx_worker_ctx_array[core_idx]->tx_pool = copy_mempools[core_idx];
+    }
 
     /* -------------------------- Build and Launch Threads -----------------------------------------------*/
     

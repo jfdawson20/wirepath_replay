@@ -1,5 +1,7 @@
 
 #include "ppr_port_rpc.h"
+#include "ppr_tx_worker.h"
+#include "ppr_time.h"
 
 int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
     //silence unused param warnings
@@ -69,5 +71,80 @@ int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *t
         return -EINVAL;
     }
     
+    return 0;
+}
+
+
+/** 
+* Handle RPC command to enable or disable TX on a port.
+* @param reply_root
+*   JSON object to populate with reply.
+* @param args
+*   JSON object containing command arguments.
+* @param thread_args
+*   Pointer to pthread args structure.
+* @return
+*   - 0 on success
+*   - -EINVAL if input parameters are invalid
+**/
+int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+
+    ppr_ports_t *global_port_list = thread_args->global_port_list;
+
+    //extract port name from command
+    json_t *jportname = json_object_get(args, "port");
+    if (!jportname) {
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+    const char *portname = json_string_value (jportname);
+
+    //validate port entry exists
+    ppr_port_entry_t *port_entry = ppr_find_port_byname(global_port_list, portname);
+    if (!port_entry) {
+        json_object_set_new(reply_root, "status", json_integer(-ENOENT));
+        return -ENOENT;
+    }
+
+    //extract enable/disable command
+    json_t *jcmd = json_object_get(args, "cmd");
+    if (!jcmd) {
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+    const char *cmd_str = json_string_value(jcmd);
+
+    uint16_t global_port_index = port_entry->global_port_index;
+
+    //get global port stream config for this port
+    ppr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
+    if(port_streams == NULL){
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+    
+    //verify stream has a valid slot assignment for enable only
+    uint32_t slot_id = atomic_load_explicit(&port_streams[global_port_index].slot_id, memory_order_acquire);
+    if (slot_id == UINT32_MAX && strcmp(cmd_str, "enable") == 0){
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: Port %s has no valid assigned pcap slot, cannot enable TX\n", portname);
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    //process command 
+    if (strcmp(cmd_str, "enable") == 0){
+        atomic_store_explicit(&port_streams[global_port_index].global_start_ns, ppr_now_ns(), memory_order_release);
+        atomic_store_explicit(&port_entry->tx_enabled, true, memory_order_release); 
+    }
+    else if (strcmp(cmd_str, "disable") == 0){
+        atomic_store_explicit(&port_entry->tx_enabled, false, memory_order_release); 
+        atomic_store_explicit(&port_streams[global_port_index].global_start_ns, ppr_now_ns(), memory_order_release);
+    }
+    else {
+        json_object_set_new(reply_root, "status", json_integer(-EINVAL));
+        return -EINVAL;
+    }
+
+    json_object_set_new(reply_root, "status", json_integer(0));
     return 0;
 }
