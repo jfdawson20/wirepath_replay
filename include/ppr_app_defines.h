@@ -64,7 +64,7 @@ typedef struct ppr_thread_args{
 
     //mempool pointers
     struct rte_mempool      *pcap_template_mpool;
-    struct rte_mempool      **txcore_copy_mpools;
+    struct rte_mempool      *txcore_copy_mpools;
 
     //QSBR Context
     ppr_rcu_ctx_t              *rcu_ctx;

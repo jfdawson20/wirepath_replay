@@ -509,8 +509,6 @@ int main(int argc, char **argv) {
 
         }
 
-        //assign this workers copy mempool 
-        tx_worker_ctx_array[core_idx]->tx_pool = copy_mempools[core_idx];
     }
 
     /* -------------------------- Build and Launch Threads -----------------------------------------------*/
@@ -556,7 +554,7 @@ int main(int argc, char **argv) {
 
         //mempool pointers
         tx_thread_args_array[core_idx]->pcap_template_mpool = pcap_mempool;
-        tx_thread_args_array[core_idx]->txcore_copy_mpools  = &copy_mempools[core_idx];
+        tx_thread_args_array[core_idx]->txcore_copy_mpools  = copy_mempools[core_idx];
 
         //QSBR Context
         tx_thread_args_array[core_idx]->rcu_ctx          = NULL;       //not used for tx worker
@@ -611,7 +609,7 @@ int main(int argc, char **argv) {
 
     //mempool pointers 
     stats_thread_args->pcap_template_mpool = pcap_mempool; 
-    stats_thread_args->txcore_copy_mpools  = &copy_mempools[0];
+    stats_thread_args->txcore_copy_mpools  = copy_mempools[0];
 
     //QSBR Context 
     stats_thread_args->rcu_ctx          = rcu_ctx;
@@ -664,7 +662,7 @@ int main(int argc, char **argv) {
 
     //mempool pointers 
     pload_thread_args->pcap_template_mpool = pcap_mempool; 
-    pload_thread_args->txcore_copy_mpools  = &copy_mempools[0];
+    pload_thread_args->txcore_copy_mpools  = copy_mempools[0];
 
     //QSBR Context 
     pload_thread_args->rcu_ctx          = rcu_ctx;
@@ -715,7 +713,7 @@ int main(int argc, char **argv) {
 
     //mempool pointers 
     control_server_thread_args->pcap_template_mpool = pcap_mempool; 
-    control_server_thread_args->txcore_copy_mpools  = &copy_mempools[0];
+    control_server_thread_args->txcore_copy_mpools  = copy_mempools[0];
 
     //QSBR Context 
     control_server_thread_args->rcu_ctx          = rcu_ctx;

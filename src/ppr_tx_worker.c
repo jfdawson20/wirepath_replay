@@ -342,8 +342,8 @@ int run_tx_worker(__rte_unused void *arg) {
     ppr_thread_args_t               *thread_args = (ppr_thread_args_t *)arg;
     ppr_ports_t                     *global_port_list = thread_args->global_port_list;
     ppr_tx_worker_ctx_t             *tx_worker_ctx = thread_args->tx_worker_ctx; 
-    struct rte_mempool              *tx_pool = tx_worker_ctx->tx_pool;
-    uint16_t                        mbuf_ts_off = thread_args->mbuf_ts_off; 
+    struct rte_mempool              *tx_pool = thread_args->txcore_copy_mpools;
+    uint16_t                         mbuf_ts_off = thread_args->mbuf_ts_off; 
     //int                             rc = 0;     
 
     //tx buffer 

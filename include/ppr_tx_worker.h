@@ -150,9 +150,6 @@ typedef struct __attribute__((aligned(64))) ppr_tx_worker_ctx {
     ppr_port_stream_ctx_t port_stream[MAX_PORTS];
     ppr_port_worker_map_t map_by_port[MAX_PORTS];
     uint16_t queue_id_by_port[MAX_PORTS];
-    
-    struct rte_mempool *tx_pool;
-
 
     const void *action_table;
 } ppr_tx_worker_ctx_t;
