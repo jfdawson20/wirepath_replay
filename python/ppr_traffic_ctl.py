@@ -120,7 +120,7 @@ class PprTrafficClient:
         pace_mode: int,
         start_mode: int,
         fixed_index: int,
-        replay_window_sec: int,
+        replay_window_sec: float,
     ) -> Dict[str, Any]:
         payload = {
             "port": port,
@@ -128,7 +128,7 @@ class PprTrafficClient:
             "pace_mode": int(pace_mode),
             "start_mode": int(start_mode),
             "fixed_index": int(fixed_index),
-            "replay_window_sec": int(replay_window_sec),
+            "replay_window_sec": float(replay_window_sec),
         }
         return self.ctl.call(CMD_ASSIGN_PORT_SLOT, args=payload)
 

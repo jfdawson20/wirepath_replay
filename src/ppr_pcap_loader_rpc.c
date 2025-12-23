@@ -330,7 +330,11 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     port_streams[global_port_index].stream_start_index = start_index;
 
     //4) set the replay window in ns
-    port_streams[global_port_index].replay_window_ns = (uint64_t)replay_window_sec * 1000000000ULL;
+    uint64_t replay_window_ns = (uint64_t)replay_window_sec * 1000000000ULL;
+    if(pace_mode == VC_PACE_PCAP_TS && replay_window_ns < slot_entry->delta_ns){
+        replay_window_ns = slot_entry->delta_ns;
+    }
+    port_streams[global_port_index].replay_window_ns = replay_window_ns;
 
     //5) set the global start time to 0 for now, it gets set when tx is enabled and first packet is sent
     port_streams[global_port_index].global_start_ns = 0;
