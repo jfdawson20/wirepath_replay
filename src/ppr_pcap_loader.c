@@ -468,6 +468,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             l2_flowkey_valid = true;
                 //WPS_LOG(WPS_LOG_DP, RTE_LOG_INFO, "port value in l2 flowkey: %d\n", l2_flow_key.in_port);
         }
+
         bool ip_flowkey_valid = false;
         ppr_flow_key_t ip_flow_key = {0};
         rc = ppr_flowkey_from_hdr( &hdrs, &ip_flow_key, slotid);
@@ -475,7 +476,9 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
             ip_flowkey_valid = true;
         }
 
-
+        if(!ip_flowkey_valid && !l2_flowkey_valid){
+            PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG, "No valid flow keys could be built for ACL lookup\n");
+        }
         //process acl lookup and populate mbuf priv area
         process_acl_lookup(thread_args->acl_runtime,
                            acl_db,
