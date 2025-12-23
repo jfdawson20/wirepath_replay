@@ -407,9 +407,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_asg.add_argument(
         "--replay-window-sec",
-        type=int,
+        type=float,
         default=0,
-        help="replay_window_sec (int). 0 typically means 'no window' if supported.",
+        help="replay_window_sec (float). 0 typically means 'no window' if supported.",
     )
 
     return p
