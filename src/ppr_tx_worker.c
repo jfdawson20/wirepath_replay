@@ -145,10 +145,6 @@ static bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
         return false; /* can't safely edit -> treat as NOOP */
 
     ppr_flow_action_kind_t act = priv->pending_policy_action.default_policy;
-    PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO,
-            "Modifying mbuf %p with action %s\n",
-            (void *)m,
-            ppr_flow_action_kind_to_str(act));
 
     if (act == FLOW_ACT_NOOP)
         return false;
