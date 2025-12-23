@@ -218,7 +218,7 @@ void *run_ppr_stats_thread(void *arg) {
             update_memstats(thread_args);
 
             //3) update worker stats 
-            ppr_update_worker_stats(thread_args);
+            //ppr_update_worker_stats(thread_args);
 
             //4) update ACL stats 
             ppr_acl_stats_accumulator(thread_args->acl_runtime);
