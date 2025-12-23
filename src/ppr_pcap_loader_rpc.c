@@ -55,6 +55,7 @@ int ppr_get_loaded_pcaps_list(json_t *reply_root, json_t *args, ppr_thread_args_
     (void)args;
 
     if (!reply_root || !thread_args || !thread_args->pcap_storage) {
+        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to ppr_get_loaded_pcaps_list\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
