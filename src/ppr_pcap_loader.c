@@ -227,7 +227,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
 {
 
     (void)acl_db; //unused for now
-
+    PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "Processing ACL lookup for mbuf %p\n", (void*)m);
     ppr_policy_action_t ip_acl_action = {0};
     ppr_policy_action_t l2_acl_action = {0};
 
