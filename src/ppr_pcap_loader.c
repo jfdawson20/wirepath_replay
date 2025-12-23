@@ -173,7 +173,7 @@ static inline int append_bytes_to_mbuf(struct rte_mbuf **pmbuf,
         }
 
         uint32_t to_copy = (len - off < tail) ? (len - off) : tail;
-        uint8_t *dst = rte_pktmbuf_append(m, to_copy);
+        char *dst = rte_pktmbuf_append(m, to_copy);
         if (!dst) return -ENOSPC;
 
         rte_memcpy(dst, src + off, to_copy);
@@ -264,10 +264,6 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
 
         struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
         if (unlikely(m->buf_addr == NULL)) {
-            fprintf(stderr,
-                "BUG: mbuf buf_addr NULL. mp=%s data_room? m=%p buf_len=%u data_off=%u\n",
-                mp ? mp->name : "(null)",
-                m, m->buf_len, m->data_off);
             return -EINVAL;
         }
 

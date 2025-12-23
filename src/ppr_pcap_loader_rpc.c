@@ -297,9 +297,9 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
 
     //extract the replay window in seconds - only used for paced modes
     json_t *jreplay_window_sec = json_object_get(args, "replay_window_sec");
-    uint32_t replay_window_sec = 0;
+    float replay_window_sec = 0;
     if (jreplay_window_sec) {
-        replay_window_sec = (uint32_t)json_integer_value(jreplay_window_sec);
+        replay_window_sec = (float)json_real_value(jreplay_window_sec);
     }
 
     if (pace_mode == VC_PACE_PCAP_TS && replay_window_sec == 0){
@@ -330,7 +330,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     port_streams[global_port_index].stream_start_index = start_index;
 
     //4) set the replay window in ns
-    uint64_t replay_window_ns = (uint64_t)replay_window_sec * 1000000000ULL;
+    uint64_t replay_window_ns = (uint64_t)(replay_window_sec * 1000000000ULL);
     if(pace_mode == VC_PACE_PCAP_TS && replay_window_ns < slot_entry->delta_ns){
         replay_window_ns = slot_entry->delta_ns;
     }
