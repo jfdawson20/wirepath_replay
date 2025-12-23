@@ -334,6 +334,8 @@ void *run_ppr_app_server_thread(void *arg) {
         rte_pause();
     }
 
+    PPR_LOG(PPR_LOG_CTL, RTE_LOG_INFO, "\n[CTRL] Listening on port %d\n", ctl_port);
+
     /* Main processing loop - accept connection and use handle_command function to process*/
     char buf[MAX_SOCK_PAYLOAD];
     char command[MAX_SOCK_PAYLOAD];
