@@ -466,7 +466,7 @@ def display_acl_rules(ruleset_type, json_dict):
 
             results.append([rule_id, tenant_ids, priority, src_ip, dst_ip,
                             src_ports, dst_ports, in_ports, proto, action,
-                            egress_targets, lb_groups, total_flows, active_flows])
+                            total_flows, active_flows])
 
         sorted_rows = sorted(results, key=lambda x: x[2], reverse=True)
         for row in sorted_rows:
@@ -498,7 +498,7 @@ def display_acl_rules(ruleset_type, json_dict):
 
             results.append([rule_id, tenant_ids, priority, src_ip, dst_ip,
                             src_ports, dst_ports, in_ports, proto, action,
-                            egress_targets, lb_groups, total_flows, active_flows])
+                            total_flows, active_flows])
 
         sorted_rows = sorted(results, key=lambda x: x[2], reverse=True)
         for row in sorted_rows:
@@ -533,7 +533,7 @@ def display_acl_rules(ruleset_type, json_dict):
 
             results.append([rule_id, tenant_ids, priority, is_mac_match,
                             src_mac, dst_mac, ether_type, in_ports, outer_vlans,
-                            inner_vlans, action, egress_targets, lb_groups, total_flows, active_flows])
+                            inner_vlans, action, total_flows, active_flows])
 
         sorted_rows = sorted(results, key=lambda x: x[2], reverse=True)
         for row in sorted_rows:
