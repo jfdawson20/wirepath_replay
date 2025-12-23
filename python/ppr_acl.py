@@ -36,6 +36,7 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
     "FLOW_ACT_MODIFY_DSTPORT": 8, 
     "FLOW_ACT_MODIFY_DST_ALL": 9, 
     "FLOW_ACT_MODIFY_ALL" : 10,     
+}
 ACTION_ID_TO_NAME: Dict[int, str] = {v: k for k, v in ACTION_NAME_TO_ID.items()}
 
 
