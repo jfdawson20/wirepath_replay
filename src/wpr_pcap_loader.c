@@ -606,7 +606,7 @@ void *run_pcap_loader_thread(void *arg) {
         /* Add CMD_APPLY_ACL_RULES handling here if desired */
     }
 
-    PPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Pcap Loader Thread - Exiting\n");
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Pcap Loader Thread - Exiting\n");
     /* Shutdown: no concurrent readers should remain */
     pcap_storage_free(thread_args->pcap_storage);
     return NULL;

@@ -518,7 +518,7 @@ int run_tx_worker(__rte_unused void *arg) {
         } /* end - for port loop */
     } /* end - while loop */
 
-    PPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Tx Worker Thread %d - Exiting\n", thread_args->thread_index);
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Tx Worker Thread %d - Exiting\n", thread_args->thread_index);
     return 0;
 }
 
