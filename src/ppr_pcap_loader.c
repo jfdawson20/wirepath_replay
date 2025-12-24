@@ -223,10 +223,14 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
                                       bool ip_flowkey_valid,
                                       const ppr_flow_key_t *ip_flow_key,
                                       bool l2_flowkey_valid,
-                                      const ppr_l2_flow_key_t *l2_flow_key)
+                                      const ppr_l2_flow_key_t *l2_flow_key,
+                                      unsigned int thread_index)
 {
 
     (void)acl_db; //unused for now
+
+    ppr_acl_stats_shard_t *acl_stats_shard = &acl_runtime_ctx->stats_shards[thread_index];
+
     ppr_policy_action_t ip_acl_action = {0};
     ppr_policy_action_t l2_acl_action = {0};
 
@@ -320,7 +324,20 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     if(is_l2_action)
         priv->acl_policy_type = PPR_L3_NONE;
     else
-    priv->acl_policy_type = hdrs->l3_type;
+        priv->acl_policy_type = hdrs->l3_type;
+
+
+    //increment acl stats 
+    if(priv->acl_policy_type == PPR_L3_IPV4){
+        atomic_fetch_add_explicit(&acl_stats_shard->ip4[priv->acl_policy_index].new_flows, 1, memory_order_relaxed);
+    }
+    else if (priv->acl_policy_type == PPR_L3_IPV6){
+        atomic_fetch_add_explicit(&acl_stats_shard->ip6[priv->acl_policy_index].new_flows, 1, memory_order_relaxed);
+    }
+    else{
+        atomic_fetch_add_explicit(&acl_stats_shard->l2[priv->acl_policy_index].new_flows, 1, memory_order_relaxed);
+    }
+
 
     return;
 
@@ -490,7 +507,8 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
                            ip_flowkey_valid,
                            &ip_flow_key,
                            l2_flowkey_valid,
-                           &l2_flow_key);
+                           &l2_flow_key,
+                           thread_args->thread_index);
        
 
         mbuf_array_push(mbuff_array, m);
