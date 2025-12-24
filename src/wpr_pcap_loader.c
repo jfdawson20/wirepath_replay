@@ -562,7 +562,7 @@ void *run_pcap_loader_thread(void *arg) {
         rte_pause();
     }
 
-    while (1) {
+    while (!force_quit) {
         while (ctl->command == CMD_NONE) {
             pthread_cond_wait(&ctl->cond, &ctl->lock);
         }
