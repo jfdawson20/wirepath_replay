@@ -813,6 +813,8 @@ int main(int argc, char **argv) {
     WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### All threads initialized, starting processing ###############################\n\n");
 
+    
+
     //wait and clean up
     pthread_join(stats_thread, NULL);
     pthread_join(pcap_loader_thread, NULL);
@@ -870,6 +872,6 @@ int main(int argc, char **argv) {
     //eal cleanup 
     rte_eal_cleanup();
 
-    printf("Application exiting cleanly");
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "WPR Application Exited Successfully\n");
     return 0;
 }
