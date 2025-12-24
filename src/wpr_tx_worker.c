@@ -487,7 +487,8 @@ int run_tx_worker(__rte_unused void *arg) {
                 continue;
 
             uint32_t start = port_stream_ctx->rr_next_client;
-            uint32_t budget_clients = 32; 
+            uint32_t budget_clients = RTE_MIN(nclients, 512); 
+
 
             for (uint32_t k = 0; k < budget_clients && k < nclients; k++) {
                 uint32_t vc_idx = (start + k) % nclients;
