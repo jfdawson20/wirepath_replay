@@ -2,13 +2,13 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
-Filename: ppr_server.c 
-Description: the ppr server module is a JSON based RPC control server that listens for incoming TCP connections on a specified port.
+Filename: wpr_server.c 
+Description: the wpr server module is a JSON based RPC control server that listens for incoming TCP connections on a specified port.
 It supports a variety of commands for querying statistics, configuring ports, managing egress table entries, and other control plane functions.
 The server uses the jansson library for JSON parsing and construction, and is designed to be extensible with a command table that maps command names 
 to handler functions. The server runs in its own thread and interacts with the main application state via shared data structures passed in the thread arguments.
 
-ppr_server is the primary control interface for the PPR application, allowing external clients to monitor and manage the datapath behavior at runtime.
+wpr_server is the primary control interface for the WPR application, allowing external clients to monitor and manage the datapath behavior at runtime.
 
 */
 
@@ -30,36 +30,36 @@ ppr_server is the primary control interface for the PPR application, allowing ex
 #include <rte_ethdev.h>
 #include <rte_hash.h>
 
-#include "ppr_app_defines.h"
-#include "ppr_control.h"
-#include "ppr_stats.h"
-#include "ppr_log.h"
+#include "wpr_app_defines.h"
+#include "wpr_control.h"
+#include "wpr_stats.h"
+#include "wpr_log.h"
 
 //RPC Library Includes
-#include "ppr_stats_rpc.h"
-#include "ppr_port_rpc.h"
-#include "ppr_acl_rpc.h"
-#include "ppr_pcap_loader_rpc.h"
+#include "wpr_stats_rpc.h"
+#include "wpr_port_rpc.h"
+#include "wpr_acl_rpc.h"
+#include "wpr_pcap_loader_rpc.h"
 
 /* API function Defs */
 //general commands
-static int ppr_cmd_help(json_t *reply_root,json_t *args, ppr_thread_args_t *thread_args);
-static int ppr_cmd_ping(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args);
+static int wpr_cmd_help(json_t *reply_root,json_t *args, wpr_thread_args_t *thread_args);
+static int wpr_cmd_ping(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
 
 /* Command table – defines all supported commands */
-const ppr_cmd_def_t ppr_cmd_table[] = {
+const wpr_cmd_def_t wpr_cmd_table[] = {
     /* --------------------------------- General commands --------------------------------- */
     {
         .name        = "help",
         .description = "Return help document describing all supported commands",
         .args_schema = "{}",
-        .handler     = ppr_cmd_help,
+        .handler     = wpr_cmd_help,
     },
     {
         .name        = "ping",
         .description = "Ping the control server",
         .args_schema = "{}",
-        .handler     = ppr_cmd_ping,
+        .handler     = wpr_cmd_ping,
     },
 
     /* --------------------------------- Stastics commands --------------------------------- */
@@ -67,96 +67,96 @@ const ppr_cmd_def_t ppr_cmd_table[] = {
         .name        = "port_stats",
         .description = "Return per-port xstats + rate metrics",
         .args_schema = "{portno: str(port_number)} // -1 for all ports",
-        .handler     = ppr_cmd_port_stats,
+        .handler     = wpr_cmd_port_stats,
     },
     {
         .name        = "mem_stats",
         .description = "Return mempool usage stats",
         .args_schema = "{}",
-        .handler     = ppr_cmd_mem_stats,
+        .handler     = wpr_cmd_mem_stats,
     },
     /* --------------------------------- ACL Table Commands ----------------------------------- */
     {
-        .name        = "ppr_cmd_get_acl_db",
+        .name        = "wpr_cmd_get_acl_db",
         .description = "Dump the current ACL rule database",
         .args_schema = "{}",
-        .handler     = ppr_cmd_get_acl_db,
+        .handler     = wpr_cmd_get_acl_db,
     },
     {
-        .name        = "ppr_cmd_add_acl_rule",
+        .name        = "wpr_cmd_add_acl_rule",
         .description = "Add a new ACL rule to the database",
         .args_schema = "{rule_type: str('ipv4'|'ipv6'|'l2'), rule_cfg: obj(rule_configuration)}",
-        .handler     = ppr_cmd_add_acl_rule,
+        .handler     = wpr_cmd_add_acl_rule,
     },
     {
-        .name        = "ppr_cmd_update_acl_rule",
+        .name        = "wpr_cmd_update_acl_rule",
         .description = "Update an existing ACL rule in the database",
         .args_schema = "{rule_type: str('ipv4'|'ipv6'|'l2'), rule_id: int(rule_id), rule_cfg: obj(rule_configuration)}",
-        .handler     = ppr_cmd_update_acl_rule,
+        .handler     = wpr_cmd_update_acl_rule,
     },
     {
-        .name        = "ppr_cmd_delete_acl_rule",
+        .name        = "wpr_cmd_delete_acl_rule",
         .description = "Delete an existing ACL rule from the database",
         .args_schema = "{rule_type: str('ipv4'|'ipv6'|'l2'), rule_id: int(rule_id)}",
-        .handler     = ppr_cmd_delete_acl_rule,
+        .handler     = wpr_cmd_delete_acl_rule,
     },
     {
-        .name        = "ppr_cmd_check_acl_status",
+        .name        = "wpr_cmd_check_acl_status",
         .description = "Check the status of the ACL database",
         .args_schema = "{}",
-        .handler     = ppr_cmd_check_acl_status,
+        .handler     = wpr_cmd_check_acl_status,
     },
     {
-        .name        = "ppr_cmd_acl_db_commit",
+        .name        = "wpr_cmd_acl_db_commit",
         .description = "Commit any pending changes to the ACL database",
         .args_schema = "{}",
-        .handler     = ppr_cmd_acl_db_commit,
+        .handler     = wpr_cmd_acl_db_commit,
     },
     /* --------------------------------- Pcap Loader Commands ----------------------------------- */
     {
-        .name        = "ppr_get_loaded_pcaps_list",
+        .name        = "wpr_get_loaded_pcaps_list",
         .description = "list loaded pcap files in memory",
         .args_schema = "{}",
-        .handler     = ppr_get_loaded_pcaps_list,
+        .handler     = wpr_get_loaded_pcaps_list,
     },
     {
-        .name        = "ppr_load_pcap_file",
+        .name        = "wpr_load_pcap_file",
         .description = "Load a pcap file into memory",
         .args_schema = "{filename: str(pcap_file_name)}",
-        .handler     = ppr_load_pcap_file,
+        .handler     = wpr_load_pcap_file,
     },
     {
-        .name        = "ppr_assign_port_slot",
+        .name        = "wpr_assign_port_slot",
         .description = "Assign a loaded pcap slot to a port for replay",
         .args_schema = "{port: str(port_name), slotid: int(slot_id), pace_mode: int(pace_mode), start_mode: int(start_mode), fixed_index: int(fixed_index), replay_window_sec: int(replay_window_sec)}",
-        .handler     = ppr_assign_port_slot,
+        .handler     = wpr_assign_port_slot,
     },
 
     /* --------------------------------- Port Commands ----------------------------------- */
     {
-        .name        = "ppr_cmd_get_port_list",
+        .name        = "wpr_cmd_get_port_list",
         .description = "List all ports configured in the application",
         .args_schema = "{}",
-        .handler     = ppr_cmd_get_port_list,
+        .handler     = wpr_cmd_get_port_list,
     },
     {
-        .name        = "ppr_port_tx_ctl",
+        .name        = "wpr_port_tx_ctl",
         .description = "Enable or disable transmission on a specified port",
         .args_schema = "{port: str(port_name), cmd: str('enable'|'disable')}",
-        .handler     = ppr_port_tx_ctl,
+        .handler     = wpr_port_tx_ctl,
     },
     {
-        .name        = "ppr_set_port_stream_vcs",
+        .name        = "wpr_set_port_stream_vcs",
         .description = "Set the number of active VCs (clients) for a given port stream",
         .args_schema = "{port: str(port_name), num_vcs: int(number_of_active_vcs)}",
-        .handler     = ppr_set_port_stream_vcs,
+        .handler     = wpr_set_port_stream_vcs,
     },
 };
 
 
 
-const size_t ppr_cmd_table_count = sizeof(ppr_cmd_table) /
-                                   sizeof(ppr_cmd_table[0]);
+const size_t wpr_cmd_table_count = sizeof(wpr_cmd_table) /
+                                   sizeof(wpr_cmd_table[0]);
 
 /** 
 * Lookup a command definition by name
@@ -165,14 +165,14 @@ const size_t ppr_cmd_table_count = sizeof(ppr_cmd_table) /
 * @return
 *   Pointer to command definition struct, or NULL if not found
 **/
-const ppr_cmd_def_t *ppr_control_find_cmd(const char *name)
+const wpr_cmd_def_t *wpr_control_find_cmd(const char *name)
 {
     if (!name)
         return NULL;
 
-    for (size_t i = 0; i < ppr_cmd_table_count; i++) {
-        if (strcmp(name, ppr_cmd_table[i].name) == 0)
-            return &ppr_cmd_table[i];
+    for (size_t i = 0; i < wpr_cmd_table_count; i++) {
+        if (strcmp(name, wpr_cmd_table[i].name) == 0)
+            return &wpr_cmd_table[i];
     }
     return NULL;
 }
@@ -183,13 +183,13 @@ const ppr_cmd_def_t *ppr_control_find_cmd(const char *name)
 * @return
 *   Pointer to JSON root object to return to caller (caller must json_decref() it)
 **/
-json_t *ppr_control_build_help_doc(void)
+json_t *wpr_control_build_help_doc(void)
 {
     json_t *root = json_object();
     json_t *cmds = json_array();
 
-    for (size_t i = 0; i < ppr_cmd_table_count; i++) {
-        const ppr_cmd_def_t *d = &ppr_cmd_table[i];
+    for (size_t i = 0; i < wpr_cmd_table_count; i++) {
+        const wpr_cmd_def_t *d = &wpr_cmd_table[i];
 
         json_t *cmd = json_object();
         json_object_set_new(cmd, "name",
@@ -220,14 +220,14 @@ json_t *ppr_control_build_help_doc(void)
 *   - 0 on success
 *   - -EINVAL if input parameters are invalid
 **/
-static int ppr_cmd_help(json_t *reply_root,json_t *args, ppr_thread_args_t *thread_args)
+static int wpr_cmd_help(json_t *reply_root,json_t *args, wpr_thread_args_t *thread_args)
 {
     //silence unused param warnings
     (void)args;
     (void)thread_args;
 
 
-    json_t *doc = ppr_control_build_help_doc();
+    json_t *doc = wpr_control_build_help_doc();
     /* merge: reply_root becomes the help doc */
     json_object_update(reply_root, doc);
     json_decref(doc);
@@ -246,7 +246,7 @@ static int ppr_cmd_help(json_t *reply_root,json_t *args, ppr_thread_args_t *thre
 *   - 0 on success
 *   - -EINVAL if input parameters are invalid
 **/
-static int ppr_cmd_ping(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+static int wpr_cmd_ping(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     //silence unused param warnings
     (void)args;
     (void)thread_args;
@@ -261,7 +261,7 @@ static int ppr_cmd_ping(json_t *reply_root, json_t *args, ppr_thread_args_t *thr
 
 /* ---------------------------------------- Server Thread and Command Processing Functions ------------------- */
 /** 
-* Handle an incoming command message, parse and dispatch to appropriate handler
+* Handle an incoming command message, parse and dispatch to awpropriate handler
 * @param msg
 *   Command message string
 * @param fd
@@ -272,7 +272,7 @@ static int ppr_cmd_ping(json_t *reply_root, json_t *args, ppr_thread_args_t *thr
 *   - 0 on success
 *   - -EINVAL if command is invalid
 **/
-static int handle_command(const char *msg, int fd, ppr_thread_args_t *thread_args) {
+static int handle_command(const char *msg, int fd, wpr_thread_args_t *thread_args) {
     
     int rc = 0; 
     /* Parse the command and confirm is a valid json command if not return error*/
@@ -286,7 +286,7 @@ static int handle_command(const char *msg, int fd, ppr_thread_args_t *thread_arg
         json_decref(err);
         return -EINVAL;
     }
-    PPR_LOG(PPR_LOG_CTL, RTE_LOG_DEBUG, "Control server parsed JSON command successfully: %s\n",msg);
+    WPR_LOG(WPR_LOG_CTL, RTE_LOG_DEBUG, "Control server parsed JSON command successfully: %s\n",msg);
     /* Extract command as string, keep args as json for flexible parsing per command*/
     const char *cmd_str   = json_string_value(json_object_get(reply_root, "cmd"));
     json_t *args          = json_object_get(reply_root, "args");
@@ -297,7 +297,7 @@ static int handle_command(const char *msg, int fd, ppr_thread_args_t *thread_arg
         json_object_set_new(reply, "error", json_string("missing cmd"));
         rc = -EINVAL;
     } else {
-        const ppr_cmd_def_t *def = ppr_control_find_cmd(cmd_str);
+        const wpr_cmd_def_t *def = wpr_control_find_cmd(cmd_str);
 
         if (!def) {
             json_object_set_new(reply, "error", json_string("unknown command"));
@@ -314,7 +314,7 @@ static int handle_command(const char *msg, int fd, ppr_thread_args_t *thread_arg
     }
 
     char *reply_str = json_dumps(reply, 0);
-    PPR_LOG(PPR_LOG_CTL, RTE_LOG_DEBUG, "Control server sending reply: %s\n", reply_str);
+    WPR_LOG(WPR_LOG_CTL, RTE_LOG_DEBUG, "Control server sending reply: %s\n", reply_str);
     //send with newline terminator
     if (reply_str != NULL) {
         size_t len = strlen(reply_str);
@@ -336,9 +336,9 @@ static int handle_command(const char *msg, int fd, ppr_thread_args_t *thread_arg
 * @return
 *   Always returns 0
 **/
-void *run_ppr_app_server_thread(void *arg) {
+void *run_wpr_app_server_thread(void *arg) {
     //reclass arg structs passed from the main thread
-    ppr_thread_args_t *thread_args  = (ppr_thread_args_t *)arg;
+    wpr_thread_args_t *thread_args  = (wpr_thread_args_t *)arg;
     unsigned int ctl_port           = thread_args->controller_port;
     uint64_t successful_connections = 0;
     int rc = 0;
@@ -374,7 +374,7 @@ void *run_ppr_app_server_thread(void *arg) {
         rte_pause();
     }
 
-    PPR_LOG(PPR_LOG_CTL, RTE_LOG_INFO, "\n[CTRL] Listening on port %d\n", ctl_port);
+    WPR_LOG(WPR_LOG_CTL, RTE_LOG_INFO, "\n[CTRL] Listening on port %d\n", ctl_port);
 
     /* Main processing loop - accept connection and use handle_command function to process*/
     char buf[MAX_SOCK_PAYLOAD];
@@ -396,7 +396,7 @@ void *run_ppr_app_server_thread(void *arg) {
                 // Interrupted by signal: re-check force_quit and continue
                 continue;
             }
-            PPR_LOG(PPR_LOG_CTL, RTE_LOG_ERR,
+            WPR_LOG(WPR_LOG_CTL, RTE_LOG_ERR,
                     "poll() on srv_fd failed: %s\n", strerror(errno));
             break;
         }
@@ -409,7 +409,7 @@ void *run_ppr_app_server_thread(void *arg) {
         if (!(pfd.revents & POLLIN)) {
             // Some other event (error/hup). Up to you how to handle.
             if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
-                PPR_LOG(PPR_LOG_CTL, RTE_LOG_ERR,
+                WPR_LOG(WPR_LOG_CTL, RTE_LOG_ERR,
                         "poll() error/hup on srv_fd, revents=0x%x\n", pfd.revents);
                 break;
             }
@@ -432,13 +432,13 @@ void *run_ppr_app_server_thread(void *arg) {
                 break;
             }
 
-            PPR_LOG(PPR_LOG_CTL, RTE_LOG_ERR,
+            WPR_LOG(WPR_LOG_CTL, RTE_LOG_ERR,
                     "accept() failed: %s\n", strerror(errno));
             continue;
         }
 
         successful_connections++;
-        PPR_LOG(PPR_LOG_CTL, RTE_LOG_DEBUG, "[CTRL] Client connected - Connection Count: %ld\n", successful_connections);
+        WPR_LOG(WPR_LOG_CTL, RTE_LOG_DEBUG, "[CTRL] Client connected - Connection Count: %ld\n", successful_connections);
         /* process received data */
         while (good_command == 1) {
             
@@ -460,10 +460,10 @@ void *run_ppr_app_server_thread(void *arg) {
                     
                     //if line contains valid data, process
                     if (command_len > 0) {
-                        PPR_LOG(PPR_LOG_CTL, RTE_LOG_DEBUG, "Control server received command: %s\n", command);
+                        WPR_LOG(WPR_LOG_CTL, RTE_LOG_DEBUG, "Control server received command: %s\n", command);
                         rc = handle_command(command,cli_fd,thread_args);
                         if (rc < 0){
-                            PPR_LOG(PPR_LOG_CTL, RTE_LOG_ERR, "Control server failed to process command: %s\n", command);
+                            WPR_LOG(WPR_LOG_CTL, RTE_LOG_ERR, "Control server failed to process command: %s\n", command);
                         }
                     }
 
@@ -477,7 +477,7 @@ void *run_ppr_app_server_thread(void *arg) {
                     
                     //overflow case, return malformed command error
                     } else {
-                        PPR_LOG(PPR_LOG_CTL, RTE_LOG_ERR, "Control server received malformed command (buffer overflow)\n"); 
+                        WPR_LOG(WPR_LOG_CTL, RTE_LOG_ERR, "Control server received malformed command (buffer overflow)\n"); 
                         json_t *err = json_pack("{s:s}", "error", "Malformed Command");
                         char *reply = json_dumps(err, 0);
                         send(cli_fd, reply, strlen(reply), 0);
@@ -498,7 +498,7 @@ void *run_ppr_app_server_thread(void *arg) {
         close(cli_fd);
         //printf("[CTRL] Client disconnected\n");
     }
-    PPR_LOG(PPR_LOG_CTL, RTE_LOG_INFO, "\n\tControl Server Thread - Thread Exiting\n");
+    WPR_LOG(WPR_LOG_CTL, RTE_LOG_INFO, "\n\tControl Server Thread - Thread Exiting\n");
     close(srv_fd);
     return (void*)0;
 }

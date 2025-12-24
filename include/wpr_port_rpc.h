@@ -1,5 +1,5 @@
-#ifndef PPR_PORT_RPC_H
-#define PPR_PORT_RPC_H
+#ifndef WPR_PORT_RPC_H
+#define WPR_PORT_RPC_H
 
 #include <unistd.h>
 #include <jansson.h>
@@ -13,12 +13,12 @@
 #include <rte_ethdev.h>
 #include <rte_hash.h>
 
-#include "ppr_app_defines.h"
-#include "ppr_ports.h"
-#include "ppr_log.h"
+#include "wpr_app_defines.h"
+#include "wpr_ports.h"
+#include "wpr_log.h"
 
-int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args);
-int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args);
-int ppr_set_port_stream_vcs(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args);
+int wpr_cmd_get_port_list(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
+int wpr_port_tx_ctl(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
+int wpr_set_port_stream_vcs(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
 
-#endif // PPR_PORT_RPC_H
+#endif // WPR_PORT_RPC_H

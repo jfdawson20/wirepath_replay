@@ -2,13 +2,13 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
-Filename: ppr_header_extract.c
-Description: ppr_header_extract.c and ppr_header_extract.h provide an API for parsing packet headers from rte_mbuf structures. The header file includes 
+Filename: wpr_header_extract.c
+Description: wpr_header_extract.c and wpr_header_extract.h provide an API for parsing packet headers from rte_mbuf structures. The header file includes 
 all the relavent struct definitions for parsed headers and function prototypes along with inline helper functions. Header parsing is split into a 
 fast-path parser and a slow-path parser. The fast-path parser is optimized for speed and handles the most common cases with minimal processing, and is 
 defined as a static inline function in the header file. The slow-path parser handles more complex scenarios including VLANs, IPv6 extension headers,
 and VXLAN encapsulation, and is defined in this source file. The slow-path parser is called only when the fast-path parser cannot fully parse the headers.
-Both parsers are accessed via a common inlined wrapper function defined in the header file and return a populated ppr_hdrs_t structure with parsed header
+Both parsers are accessed via a common inlined wrapper function defined in the header file and return a populated wpr_hdrs_t structure with parsed header
 information if parsing is successful.
 
 currently the header parser supports explicit parsing of the following protocols:
@@ -31,7 +31,7 @@ For unrecognized protocols, the parser will set the relevant type fields to NONE
 
 #define _GNU_SOURCE
 
-#include "ppr_header_extract.h"
+#include "wpr_header_extract.h"
 
 /** 
 * Skip IPv6 extension headers, updating offset and next header as well as storing the fragment header if present. 
@@ -44,7 +44,7 @@ For unrecognized protocols, the parser will set the relevant type fields to NONE
 * @return
 *   true on success, false on failure (malformed)
 **/
-static bool ipv6_skip_ext(ppr_hdrs_t *hdrs, const struct rte_mbuf *m, uint16_t *ofs_io, uint8_t *nh_io)
+static bool ipv6_skip_ext(wpr_hdrs_t *hdrs, const struct rte_mbuf *m, uint16_t *ofs_io, uint8_t *nh_io)
 {   
     uint8_t nh = *nh_io;       //next header 
     uint16_t ofs = *ofs_io;    //next header byte offset 
@@ -60,7 +60,7 @@ static bool ipv6_skip_ext(ppr_hdrs_t *hdrs, const struct rte_mbuf *m, uint16_t *
         //fragment header is special case, fixed 8 bytes
         if (nh == IPPROTO_FRAGMENT) {
             ipv6_fragh_t fragh;
-            if (!ppr_mbuf_read(m, ofs, sizeof(ipv6_fragh_t), &fragh)) 
+            if (!wpr_mbuf_read(m, ofs, sizeof(ipv6_fragh_t), &fragh)) 
                 return false;
             
             nh  = fragh.next_hdr;
@@ -75,7 +75,7 @@ static bool ipv6_skip_ext(ppr_hdrs_t *hdrs, const struct rte_mbuf *m, uint16_t *
 
             ipv6_ahh_t ah;
 
-            if (!ppr_mbuf_read(m, ofs, sizeof(ah), &ah)) 
+            if (!wpr_mbuf_read(m, ofs, sizeof(ah), &ah)) 
                 return false;
             
             //ipv6 auth header extension uses 32-bit words for length not counting first two words
@@ -87,7 +87,7 @@ static bool ipv6_skip_ext(ppr_hdrs_t *hdrs, const struct rte_mbuf *m, uint16_t *
         } else {
             
             ipv6_exth_t exth;
-            if (!ppr_mbuf_read(m, ofs, sizeof(exth), &exth)) return false;
+            if (!wpr_mbuf_read(m, ofs, sizeof(exth), &exth)) return false;
             uint16_t hdr_len = (uint16_t)((exth.hdr_ext_len + 1) * 8);
             nh  = exth.next_hdr;
             ofs += hdr_len;
@@ -109,10 +109,10 @@ static bool ipv6_skip_ext(ppr_hdrs_t *hdrs, const struct rte_mbuf *m, uint16_t *
 * @param ethertype_io
 *   Pointer to ethertype (input/output)
 * @param h
-*   Pointer to ppr_hdrs_t structure to populate VLAN info
+*   Pointer to wpr_hdrs_t structure to populate VLAN info
 **/
 static void parse_vlans(const struct rte_mbuf *m, uint16_t *ofs_io, uint16_t *ethertype_io,
-                        ppr_hdrs_t *h)
+                        wpr_hdrs_t *h)
 {   
     //initialize pointers and vlan count
     h->vlan_count = 0;
@@ -129,7 +129,7 @@ static void parse_vlans(const struct rte_mbuf *m, uint16_t *ofs_io, uint16_t *et
         struct rte_vlan_hdr vh;
         
         //attempt to read, break if read fails (e.g. segmented mbuf)
-        if (!ppr_mbuf_read(m, ofs, sizeof(vh), &vh)) 
+        if (!wpr_mbuf_read(m, ofs, sizeof(vh), &vh)) 
             break;
 
         //decode vlan tag fields and populate in header struct
@@ -159,10 +159,10 @@ static void parse_vlans(const struct rte_mbuf *m, uint16_t *ofs_io, uint16_t *et
  * On error, returns negative.
  */
 static int
-ppr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
+wpr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, wpr_hdrs_t *h, uint16_t ofs)
 {
     struct rte_ether_hdr in_eth;
-    if (!ppr_mbuf_read(m, ofs, sizeof(in_eth), &in_eth)) {
+    if (!wpr_mbuf_read(m, ofs, sizeof(in_eth), &in_eth)) {
         return -100; // bad inner Ethernet
     }
 
@@ -177,7 +177,7 @@ ppr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
             break;
 
         struct rte_vlan_hdr vh;
-        if (!ppr_mbuf_read(m, ofs, sizeof(vh), &vh)) {
+        if (!wpr_mbuf_read(m, ofs, sizeof(vh), &vh)) {
             return -101; // bad inner VLAN
         }
 
@@ -188,22 +188,22 @@ ppr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
     /* Inner IPv4 */
     if (in_et == RTE_ETHER_TYPE_IPV4) {
         struct rte_ipv4_hdr ip4i;
-        uint8_t ip4i_full_buf[PPR_IPV4_MAX_HDR_LEN];
+        uint8_t ip4i_full_buf[WPR_IPV4_MAX_HDR_LEN];
 
-        if (!ppr_mbuf_read(m, ofs, sizeof(ip4i), &ip4i))
+        if (!wpr_mbuf_read(m, ofs, sizeof(ip4i), &ip4i))
             return -102;
 
         uint8_t ihl_i = (uint8_t)((ip4i.version_ihl & 0x0F) * 4);
-        if (ihl_i < sizeof(struct rte_ipv4_hdr) || ihl_i > PPR_IPV4_MAX_HDR_LEN)
+        if (ihl_i < sizeof(struct rte_ipv4_hdr) || ihl_i > WPR_IPV4_MAX_HDR_LEN)
             return -103;
 
-        if (!ppr_mbuf_read(m, ofs, ihl_i, ip4i_full_buf))
+        if (!wpr_mbuf_read(m, ofs, ihl_i, ip4i_full_buf))
             return -104;
 
         const struct rte_ipv4_hdr *ip4i_full =
             (const struct rte_ipv4_hdr *)ip4i_full_buf;
 
-        h->inner_l3_type       = PPR_L3_IPV4;
+        h->inner_l3_type       = WPR_L3_IPV4;
         h->inner_ipv4_src      = rte_be_to_cpu_32(ip4i_full->src_addr);
         h->inner_ipv4_dst      = rte_be_to_cpu_32(ip4i_full->dst_addr);
         h->inner_ipv4_protocol = ip4i_full->next_proto_id;
@@ -212,38 +212,38 @@ ppr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
         ofs += ihl_i;
         h->inner_l4_ofs = ofs;
 
-        uint8_t ipproto_i = ip4i_full->next_proto_id;
+        uint8_t iwproto_i = ip4i_full->next_proto_id;
 
-        if (ipproto_i == IPPROTO_TCP) {
+        if (iwproto_i == IPPROTO_TCP) {
             struct rte_tcp_hdr th;
-            if (!ppr_mbuf_read(m, ofs, sizeof(th), &th))
+            if (!wpr_mbuf_read(m, ofs, sizeof(th), &th))
                 return -105;
-            h->inner_l4_type     = PPR_L4_TCP;
+            h->inner_l4_type     = WPR_L4_TCP;
             h->inner_l4_src_port = rte_be_to_cpu_16(th.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(th.dst_port);
-        } else if (ipproto_i == IPPROTO_UDP) {
+        } else if (iwproto_i == IPPROTO_UDP) {
             struct rte_udp_hdr uh_i;
-            if (!ppr_mbuf_read(m, ofs, sizeof(uh_i), &uh_i))
+            if (!wpr_mbuf_read(m, ofs, sizeof(uh_i), &uh_i))
                 return -106;
-            h->inner_l4_type     = PPR_L4_UDP;
+            h->inner_l4_type     = WPR_L4_UDP;
             h->inner_l4_src_port = rte_be_to_cpu_16(uh_i.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(uh_i.dst_port);
-        } else if (ipproto_i == IPPROTO_SCTP) {
+        } else if (iwproto_i == IPPROTO_SCTP) {
             struct rte_sctp_hdr sh;
-            if (!ppr_mbuf_read(m, ofs, sizeof(sh), &sh))
+            if (!wpr_mbuf_read(m, ofs, sizeof(sh), &sh))
                 return -107;
-            h->inner_l4_type     = PPR_L4_SCTP;
+            h->inner_l4_type     = WPR_L4_SCTP;
             h->inner_l4_src_port = rte_be_to_cpu_16(sh.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(sh.dst_port);
-        } else if (ipproto_i == IPPROTO_ICMP) {
+        } else if (iwproto_i == IPPROTO_ICMP) {
             struct rte_icmp_hdr ic;
-            if (!ppr_mbuf_read(m, ofs, sizeof(ic), &ic))
+            if (!wpr_mbuf_read(m, ofs, sizeof(ic), &ic))
                 return -108;
-            h->inner_l4_type   = PPR_L4_ICMP;
+            h->inner_l4_type   = WPR_L4_ICMP;
             h->inner_icmp_type = ic.icmp_type;
             h->inner_icmp_code = ic.icmp_code;
         } else {
-            h->inner_l4_type = PPR_L4_NONE;
+            h->inner_l4_type = WPR_L4_NONE;
         }
 
         return 0;
@@ -252,10 +252,10 @@ ppr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
     /* Inner IPv6 */
     if (in_et == RTE_ETHER_TYPE_IPV6) {
         struct rte_ipv6_hdr ip6i;
-        if (!ppr_mbuf_read(m, ofs, sizeof(ip6i), &ip6i))
+        if (!wpr_mbuf_read(m, ofs, sizeof(ip6i), &ip6i))
             return -109;
 
-        h->inner_l3_type = PPR_L3_IPV6;
+        h->inner_l3_type = WPR_L3_IPV6;
         rte_memcpy(h->inner_ipv6_src, &ip6i.src_addr, 16);
         rte_memcpy(h->inner_ipv6_dst, &ip6i.dst_addr, 16);
         h->inner_ipv6_protocol = ip6i.proto;
@@ -270,42 +270,42 @@ ppr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
 
         if (nh_i == IPPROTO_TCP) {
             struct rte_tcp_hdr th;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(th), &th))
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(th), &th))
                 return -111;
-            h->inner_l4_type     = PPR_L4_TCP;
+            h->inner_l4_type     = WPR_L4_TCP;
             h->inner_l4_src_port = rte_be_to_cpu_16(th.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(th.dst_port);
         } else if (nh_i == IPPROTO_UDP) {
             struct rte_udp_hdr uh_i;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(uh_i), &uh_i))
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(uh_i), &uh_i))
                 return -112;
-            h->inner_l4_type     = PPR_L4_UDP;
+            h->inner_l4_type     = WPR_L4_UDP;
             h->inner_l4_src_port = rte_be_to_cpu_16(uh_i.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(uh_i.dst_port);
         } else if (nh_i == IPPROTO_SCTP) {
             struct rte_sctp_hdr sh;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(sh), &sh))
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(sh), &sh))
                 return -113;
-            h->inner_l4_type     = PPR_L4_SCTP;
+            h->inner_l4_type     = WPR_L4_SCTP;
             h->inner_l4_src_port = rte_be_to_cpu_16(sh.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(sh.dst_port);
         } else if (nh_i == IPPROTO_ICMPV6) {
-            ppr_icmp6_min_t ic6;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(ic6), &ic6))
+            wpr_icmp6_min_t ic6;
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(ic6), &ic6))
                 return -114;
-            h->inner_l4_type   = PPR_L4_ICMP6;
+            h->inner_l4_type   = WPR_L4_ICMP6;
             h->inner_icmp_type = ic6.icmp6_type;
             h->inner_icmp_code = ic6.icmp6_code;
         } else {
-            h->inner_l4_type = PPR_L4_NONE;
+            h->inner_l4_type = WPR_L4_NONE;
         }
 
         return 0;
     }
 
     /* Inner non-IP – we just know it's Ethernet */
-    h->inner_l3_type = PPR_L3_NONE;
-    h->inner_l4_type = PPR_L4_NONE;
+    h->inner_l3_type = WPR_L3_NONE;
+    h->inner_l4_type = WPR_L4_NONE;
     h->inner_l3_ofs  = ofs;
     return 0;
 }
@@ -317,10 +317,10 @@ ppr_parse_inner_l2_l3_l4(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
  *   - ERSPAN Type II / basic Type III (no TLV interpretation, just skipping).
  */
 static int
-ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
+wpr_parse_gre_outer(const struct rte_mbuf *m, wpr_hdrs_t *h, uint16_t ofs)
 {
-    struct ppr_gre_hdr gh;
-    if (!ppr_mbuf_read(m, ofs, sizeof(gh), &gh)) {
+    struct wpr_gre_hdr gh;
+    if (!wpr_mbuf_read(m, ofs, sizeof(gh), &gh)) {
         return -115; // truncated GRE header
     }
 
@@ -331,7 +331,7 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
     h->gre_protocol  = gre_proto;
     h->gre_ofs       = ofs;
 
-    ofs += sizeof(struct ppr_gre_hdr);
+    ofs += sizeof(struct wpr_gre_hdr);
 
     /* We only support GRE without checksum/routing.
      * C(0x8000), R(0x4000) must be zero.
@@ -343,7 +343,7 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
     /* Optional Key and Sequence fields */
     if (flags_version & 0x2000) { /* K bit -> key present */
         uint32_t key;
-        if (!ppr_mbuf_read(m, ofs, sizeof(key), &key))
+        if (!wpr_mbuf_read(m, ofs, sizeof(key), &key))
             return -117;
         ofs += sizeof(uint32_t);
         /* Optional: stash key */
@@ -351,16 +351,16 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
 
     if (flags_version & 0x1000) { /* S bit -> sequence present */
         uint32_t seq;
-        if (!ppr_mbuf_read(m, ofs, sizeof(seq), &seq))
+        if (!wpr_mbuf_read(m, ofs, sizeof(seq), &seq))
             return -118;
         ofs += sizeof(uint32_t);
         /* Optional: stash seq */
     }
 
     /* ERSPAN Type II or III */
-    if (gre_proto == PPR_GRE_PROTO_ERSPAN2) {
-        struct ppr_erspan2_hdr eh;
-        if (!ppr_mbuf_read(m, ofs, sizeof(eh), &eh))
+    if (gre_proto == WPR_GRE_PROTO_ERSPAN2) {
+        struct wpr_erspan2_hdr eh;
+        if (!wpr_mbuf_read(m, ofs, sizeof(eh), &eh))
             return -119;
 
         uint32_t w1 = rte_be_to_cpu_32(eh.word1);
@@ -371,15 +371,15 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
         h->erspan_dir         = (uint8_t)((w1 >> 10) & 0x1);     /* bit 10 T */
         h->erspan_vlan        = (uint16_t)((w1 >> 16) & 0x0FFF); /* bits 16..27 */
 
-        ofs += sizeof(struct ppr_erspan2_hdr);
+        ofs += sizeof(struct wpr_erspan2_hdr);
 
         /* Now at inner Ethernet frame */
-        return ppr_parse_inner_l2_l3_l4(m, h, ofs);
+        return wpr_parse_inner_l2_l3_l4(m, h, ofs);
     }
 
-    if (gre_proto == PPR_GRE_PROTO_ERSPAN3) {
-        struct ppr_erspan3_hdr eh3;
-        if (!ppr_mbuf_read(m, ofs, sizeof(eh3), &eh3))
+    if (gre_proto == WPR_GRE_PROTO_ERSPAN3) {
+        struct wpr_erspan3_hdr eh3;
+        if (!wpr_mbuf_read(m, ofs, sizeof(eh3), &eh3))
             return -120;
 
         uint32_t w1 = rte_be_to_cpu_32(eh3.word1);
@@ -390,35 +390,35 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
         h->erspan_dir         = (uint8_t)((w1 >> 10) & 0x1);
         h->erspan_vlan        = (uint16_t)((w1 >> 16) & 0x0FFF);
 
-        ofs += sizeof(struct ppr_erspan3_hdr);
+        ofs += sizeof(struct wpr_erspan3_hdr);
 
         /* TODO: Type III TLVs – for now we assume none.
          * If you parse TLVs later, advance 'ofs' here.
          */
 
-        return ppr_parse_inner_l2_l3_l4(m, h, ofs);
+        return wpr_parse_inner_l2_l3_l4(m, h, ofs);
     }
 
     /* Generic GRE: IP-in-GRE or Ethernet-in-GRE */
 
     if (gre_proto == RTE_ETHER_TYPE_IPV4) {
         struct rte_ipv4_hdr ip4;
-        uint8_t ip4_full_buf[PPR_IPV4_MAX_HDR_LEN];
+        uint8_t ip4_full_buf[WPR_IPV4_MAX_HDR_LEN];
 
-        if (!ppr_mbuf_read(m, ofs, sizeof(ip4), &ip4))
+        if (!wpr_mbuf_read(m, ofs, sizeof(ip4), &ip4))
             return -121;
 
         uint8_t ihl = (uint8_t)((ip4.version_ihl & 0x0F) * 4);
-        if (ihl < sizeof(struct rte_ipv4_hdr) || ihl > PPR_IPV4_MAX_HDR_LEN)
+        if (ihl < sizeof(struct rte_ipv4_hdr) || ihl > WPR_IPV4_MAX_HDR_LEN)
             return -122;
 
-        if (!ppr_mbuf_read(m, ofs, ihl, ip4_full_buf))
+        if (!wpr_mbuf_read(m, ofs, ihl, ip4_full_buf))
             return -123;
 
         const struct rte_ipv4_hdr *ip4_full =
             (const struct rte_ipv4_hdr *)ip4_full_buf;
 
-        h->inner_l3_type       = PPR_L3_IPV4;
+        h->inner_l3_type       = WPR_L3_IPV4;
         h->inner_ipv4_src      = rte_be_to_cpu_32(ip4_full->src_addr);
         h->inner_ipv4_dst      = rte_be_to_cpu_32(ip4_full->dst_addr);
         h->inner_ipv4_protocol = ip4_full->next_proto_id;
@@ -427,38 +427,38 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
         ofs += ihl;
         h->inner_l4_ofs = ofs;
 
-        uint8_t ipproto_i = ip4_full->next_proto_id;
+        uint8_t iwproto_i = ip4_full->next_proto_id;
 
-        if (ipproto_i == IPPROTO_TCP) {
+        if (iwproto_i == IPPROTO_TCP) {
             struct rte_tcp_hdr th;
-            if (!ppr_mbuf_read(m, ofs, sizeof(th), &th))
+            if (!wpr_mbuf_read(m, ofs, sizeof(th), &th))
                 return -124;
-            h->inner_l4_type     = PPR_L4_TCP;
+            h->inner_l4_type     = WPR_L4_TCP;
             h->inner_l4_src_port = rte_be_to_cpu_16(th.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(th.dst_port);
-        } else if (ipproto_i == IPPROTO_UDP) {
+        } else if (iwproto_i == IPPROTO_UDP) {
             struct rte_udp_hdr uh_i;
-            if (!ppr_mbuf_read(m, ofs, sizeof(uh_i), &uh_i))
+            if (!wpr_mbuf_read(m, ofs, sizeof(uh_i), &uh_i))
                 return -125;
-            h->inner_l4_type     = PPR_L4_UDP;
+            h->inner_l4_type     = WPR_L4_UDP;
             h->inner_l4_src_port = rte_be_to_cpu_16(uh_i.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(uh_i.dst_port);
-        } else if (ipproto_i == IPPROTO_SCTP) {
+        } else if (iwproto_i == IPPROTO_SCTP) {
             struct rte_sctp_hdr sh;
-            if (!ppr_mbuf_read(m, ofs, sizeof(sh), &sh))
+            if (!wpr_mbuf_read(m, ofs, sizeof(sh), &sh))
                 return -126;
-            h->inner_l4_type     = PPR_L4_SCTP;
+            h->inner_l4_type     = WPR_L4_SCTP;
             h->inner_l4_src_port = rte_be_to_cpu_16(sh.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(sh.dst_port);
-        } else if (ipproto_i == IPPROTO_ICMP) {
+        } else if (iwproto_i == IPPROTO_ICMP) {
             struct rte_icmp_hdr ic;
-            if (!ppr_mbuf_read(m, ofs, sizeof(ic), &ic))
+            if (!wpr_mbuf_read(m, ofs, sizeof(ic), &ic))
                 return -127;
-            h->inner_l4_type   = PPR_L4_ICMP;
+            h->inner_l4_type   = WPR_L4_ICMP;
             h->inner_icmp_type = ic.icmp_type;
             h->inner_icmp_code = ic.icmp_code;
         } else {
-            h->inner_l4_type = PPR_L4_NONE;
+            h->inner_l4_type = WPR_L4_NONE;
         }
 
         return 0;
@@ -466,10 +466,10 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
 
     if (gre_proto == RTE_ETHER_TYPE_IPV6) {
         struct rte_ipv6_hdr ip6i;
-        if (!ppr_mbuf_read(m, ofs, sizeof(ip6i), &ip6i))
+        if (!wpr_mbuf_read(m, ofs, sizeof(ip6i), &ip6i))
             return -128;
 
-        h->inner_l3_type = PPR_L3_IPV6;
+        h->inner_l3_type = WPR_L3_IPV6;
         rte_memcpy(h->inner_ipv6_src, &ip6i.src_addr, 16);
         rte_memcpy(h->inner_ipv6_dst, &ip6i.dst_addr, 16);
         h->inner_ipv6_protocol = ip6i.proto;
@@ -484,42 +484,42 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
 
         if (nh_i == IPPROTO_TCP) {
             struct rte_tcp_hdr th;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(th), &th))
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(th), &th))
                 return -130;
-            h->inner_l4_type     = PPR_L4_TCP;
+            h->inner_l4_type     = WPR_L4_TCP;
             h->inner_l4_src_port = rte_be_to_cpu_16(th.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(th.dst_port);
         } else if (nh_i == IPPROTO_UDP) {
             struct rte_udp_hdr uh_i;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(uh_i), &uh_i))
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(uh_i), &uh_i))
                 return -131;
-            h->inner_l4_type     = PPR_L4_UDP;
+            h->inner_l4_type     = WPR_L4_UDP;
             h->inner_l4_src_port = rte_be_to_cpu_16(uh_i.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(uh_i.dst_port);
         } else if (nh_i == IPPROTO_SCTP) {
             struct rte_sctp_hdr sh;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(sh), &sh))
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(sh), &sh))
                 return -132;
-            h->inner_l4_type     = PPR_L4_SCTP;
+            h->inner_l4_type     = WPR_L4_SCTP;
             h->inner_l4_src_port = rte_be_to_cpu_16(sh.src_port);
             h->inner_l4_dst_port = rte_be_to_cpu_16(sh.dst_port);
         } else if (nh_i == IPPROTO_ICMPV6) {
-            ppr_icmp6_min_t ic6;
-            if (!ppr_mbuf_read(m, ofs_i, sizeof(ic6), &ic6))
+            wpr_icmp6_min_t ic6;
+            if (!wpr_mbuf_read(m, ofs_i, sizeof(ic6), &ic6))
                 return -133;
-            h->inner_l4_type   = PPR_L4_ICMP6;
+            h->inner_l4_type   = WPR_L4_ICMP6;
             h->inner_icmp_type = ic6.icmp6_type;
             h->inner_icmp_code = ic6.icmp6_code;
         } else {
-            h->inner_l4_type = PPR_L4_NONE;
+            h->inner_l4_type = WPR_L4_NONE;
         }
 
         return 0;
     }
 
-    if (gre_proto == PPR_GRE_PROTO_TEB) {
+    if (gre_proto == WPR_GRE_PROTO_TEB) {
         /* Transparent Ethernet Bridging – inner is Ethernet frame */
-        return ppr_parse_inner_l2_l3_l4(m, h, ofs);
+        return wpr_parse_inner_l2_l3_l4(m, h, ofs);
     }
 
     /* Unknown GRE payload – we still mark GRE present but don't decode inner */
@@ -531,11 +531,11 @@ ppr_parse_gre_outer(const struct rte_mbuf *m, ppr_hdrs_t *h, uint16_t ofs)
 * @param m
 *   Pointer to the rte_mbuf structure
 * @param h  
-*   Pointer to the ppr_hdrs_t structure to populate
+*   Pointer to the wpr_hdrs_t structure to populate
 * @return
 *   0 on success, -EINVAL on malformed packet
 **/
-__rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *h)
+__rte_noinline int wpr_parse_headers_slow(const struct rte_mbuf *m, wpr_hdrs_t *h)
 {
     //zero out header struct and l2 offset  
     __builtin_memset(h, 0, sizeof(*h));
@@ -556,7 +556,7 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
     /* ------------------------------- Ethernet Header Parse ------------------------------ */
     //attempt to parse Ethernet header
     struct rte_ether_hdr eth;
-    if (!ppr_mbuf_read(m, 0, sizeof(eth), &eth)) {
+    if (!wpr_mbuf_read(m, 0, sizeof(eth), &eth)) {
         return -1;
     }
 
@@ -582,10 +582,10 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
         
         //define ipv4 header struct and buffer to hold full header
         struct rte_ipv4_hdr ip4;
-        uint8_t ip4_full_buf[PPR_IPV4_MAX_HDR_LEN];
+        uint8_t ip4_full_buf[WPR_IPV4_MAX_HDR_LEN];
 
         //attempt to read ipv4 header, default length used
-        if (!ppr_mbuf_read(m, ofs, sizeof(ip4), &ip4)){
+        if (!wpr_mbuf_read(m, ofs, sizeof(ip4), &ip4)){
             return -2;
         }
 
@@ -593,19 +593,19 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
         uint8_t ihl = (uint8_t)((ip4.version_ihl & 0x0F) * 4);
 
         // malformed header
-        if (ihl < sizeof(struct rte_ipv4_hdr) || ihl > PPR_IPV4_MAX_HDR_LEN){
+        if (ihl < sizeof(struct rte_ipv4_hdr) || ihl > WPR_IPV4_MAX_HDR_LEN){
             return -3;  
         }
 
         //read full ipv4 header, includes IHL fields 
-        if (!ppr_mbuf_read(m, ofs, ihl, ip4_full_buf))
+        if (!wpr_mbuf_read(m, ofs, ihl, ip4_full_buf))
             return -4;
 
         //now that we have a full header, recast as ipv4 struct pointer for access
         const struct rte_ipv4_hdr *ip4_full = (const struct rte_ipv4_hdr *)ip4_full_buf;
 
         //populate parsed IPV4 header struct fields
-        h->l3_type            = PPR_L3_IPV4;
+        h->l3_type            = WPR_L3_IPV4;
         h->outer_ipv4_src     = rte_be_to_cpu_32(ip4_full->src_addr);
         h->outer_ipv4_dst     = rte_be_to_cpu_32(ip4_full->dst_addr);
         h->outer_ipv4_protocol= ip4_full->next_proto_id;
@@ -633,7 +633,7 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
 
             /* IPv4 + GRE (generic + ERSPAN) */
             if (proto == IPPROTO_GRE) {
-                int rc_gre = ppr_parse_gre_outer(m, h, ofs);
+                int rc_gre = wpr_parse_gre_outer(m, h, ofs);
                 if (rc_gre < 0)
                     return rc_gre;
                 /* We treat GRE/ERSPAN as fully parsed at this point. */
@@ -644,24 +644,24 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
             if (proto == IPPROTO_UDP) {
                 //create and read a UDP struct
                 struct rte_udp_hdr uh;
-                if (!ppr_mbuf_read(m, ofs, sizeof(uh), &uh)) {
+                if (!wpr_mbuf_read(m, ofs, sizeof(uh), &uh)) {
                     return -5;
                 }
 
                 //if successful store outer L4 
-                h->l4_type           = PPR_L4_UDP;
+                h->l4_type           = WPR_L4_UDP;
                 h->outer_l4_src_port = rte_be_to_cpu_16(uh.src_port);
                 h->outer_l4_dst_port = rte_be_to_cpu_16(uh.dst_port);
                 ofs += sizeof(struct rte_udp_hdr);
 
                 /* ------------------------------- IPV4 Outer + VXLAN / Inner Header Parsing -------------------------- */
                 //VXLAN is a sepecial case of UDP for supporting multi-tenant overlay networks, if we detect VXLAN port, parse inner headers
-                if (h->outer_l4_dst_port == PPR_VXLAN_UDP_PORT) {
+                if (h->outer_l4_dst_port == WPR_VXLAN_UDP_PORT) {
                     
                     //build and read VXLAN Header
-                    struct ppr_vxlan_hdr vxh;
+                    struct wpr_vxlan_hdr vxh;
                     
-                    if (!ppr_mbuf_read(m, ofs, sizeof(vxh), &vxh)) {
+                    if (!wpr_mbuf_read(m, ofs, sizeof(vxh), &vxh)) {
                         // truncated header – *maybe* treat as malformed
                         return -5;  // or just "give up" and let caller drop
                     }
@@ -678,10 +678,10 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
                     h->vxlan_vni     = ((uint32_t)vxh.vni[0] << 16) |
                                        ((uint32_t)vxh.vni[1] << 8)  |
                                        ((uint32_t)vxh.vni[2]);
-                    ofs += sizeof(struct ppr_vxlan_hdr);
+                    ofs += sizeof(struct wpr_vxlan_hdr);
 
                     /* ------------------------------- IPV4 Outer + VXLAN + Inner Ethernet Processing -------------------------- */
-                    int rc_inner = ppr_parse_inner_l2_l3_l4(m, h, ofs);
+                    int rc_inner = wpr_parse_inner_l2_l3_l4(m, h, ofs);
                     if (rc_inner < 0)
                         return rc_inner;
                 } 
@@ -689,10 +689,10 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
             } else if (proto == IPPROTO_TCP) {
                 //parse or bail 
                 struct rte_tcp_hdr th;
-                if (!ppr_mbuf_read(m, ofs, sizeof(th), &th)) {
+                if (!wpr_mbuf_read(m, ofs, sizeof(th), &th)) {
                     return -21;
                 }
-                h->l4_type           = PPR_L4_TCP;
+                h->l4_type           = WPR_L4_TCP;
                 h->outer_l4_src_port = rte_be_to_cpu_16(th.src_port);
                 h->outer_l4_dst_port = rte_be_to_cpu_16(th.dst_port);
             
@@ -700,10 +700,10 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
             } else if (proto == IPPROTO_SCTP) {
                 //parse or bail
                 struct rte_sctp_hdr sh;
-                if (!ppr_mbuf_read(m, ofs, sizeof(sh), &sh)) {
+                if (!wpr_mbuf_read(m, ofs, sizeof(sh), &sh)) {
                     return -23;
                 }
-                h->l4_type           = PPR_L4_SCTP;
+                h->l4_type           = WPR_L4_SCTP;
                 h->outer_l4_src_port = rte_be_to_cpu_16(sh.src_port);
                 h->outer_l4_dst_port = rte_be_to_cpu_16(sh.dst_port);
             
@@ -711,10 +711,10 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
             } else if (proto == IPPROTO_ICMP) {
                 //parse or bail
                 struct rte_icmp_hdr ic;
-                if (!ppr_mbuf_read(m, ofs, sizeof(ic), &ic)) {
+                if (!wpr_mbuf_read(m, ofs, sizeof(ic), &ic)) {
                     return -24;
                 }
-                h->l4_type        = PPR_L4_ICMP;
+                h->l4_type        = WPR_L4_ICMP;
                 h->outer_icmp_type = ic.icmp_type;
                 h->outer_icmp_code = ic.icmp_code;
             }
@@ -724,12 +724,12 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
     } else if (ethertype == RTE_ETHER_TYPE_IPV6) {
         //define ipv6 header struct and attempt to read, bail if malformed
         struct rte_ipv6_hdr ip6;
-        if (!ppr_mbuf_read(m, ofs, sizeof(ip6), &ip6)) {
+        if (!wpr_mbuf_read(m, ofs, sizeof(ip6), &ip6)) {
             return -25;
         }
 
         //populate parsed IPV6 header struct fields
-        h->l3_type = PPR_L3_IPV6;
+        h->l3_type = WPR_L3_IPV6;
         rte_memcpy(h->outer_ipv6_src, &ip6.src_addr, 16);
         rte_memcpy(h->outer_ipv6_dst, &ip6.dst_addr, 16);
         h->outer_ipv6_protocol = ip6.proto;
@@ -751,7 +751,7 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
 
         /* IPv6 + GRE (generic + ERSPAN) */
         if (nh == IPPROTO_GRE) {
-            int rc_gre = ppr_parse_gre_outer(m, h, ofs);
+            int rc_gre = wpr_parse_gre_outer(m, h, ofs);
             if (rc_gre < 0)
                 return rc_gre;
             return 0;
@@ -762,20 +762,20 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
         if (nh == IPPROTO_UDP) {
             //parse or bail
             struct rte_udp_hdr uh;
-            if (!ppr_mbuf_read(m, ofs, sizeof(uh), &uh)) {
+            if (!wpr_mbuf_read(m, ofs, sizeof(uh), &uh)) {
                 return -27;
             }
-            h->l4_type           = PPR_L4_UDP;
+            h->l4_type           = WPR_L4_UDP;
             h->outer_l4_src_port = rte_be_to_cpu_16(uh.src_port);
             h->outer_l4_dst_port = rte_be_to_cpu_16(uh.dst_port);
             ofs += sizeof(struct rte_udp_hdr);
 
             /* ------------------------------- IPV6 Outer + VXLAN / Inner Header Parsing -------------------------- */
-            if (h->outer_l4_dst_port == PPR_VXLAN_UDP_PORT) {
+            if (h->outer_l4_dst_port == WPR_VXLAN_UDP_PORT) {
 
                 //parse or bail
-                struct ppr_vxlan_hdr vxh;
-                if (!ppr_mbuf_read(m, ofs, sizeof(vxh), &vxh)) {
+                struct wpr_vxlan_hdr vxh;
+                if (!wpr_mbuf_read(m, ofs, sizeof(vxh), &vxh)) {
                     // truncated header – *maybe* treat as malformed
                     return -5;  // or just "give up" and let caller drop
                 }
@@ -790,10 +790,10 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
                 h->vxlan_vni     = ((uint32_t)vxh.vni[0] << 16) |
                                    ((uint32_t)vxh.vni[1] << 8)  |
                                    ((uint32_t)vxh.vni[2]);
-                ofs += sizeof(struct ppr_vxlan_hdr);
+                ofs += sizeof(struct wpr_vxlan_hdr);
 
                 /* ------------------------------- IPV6 Outer + VXLAN + Inner Ethernet Processing -------------------------- */
-                int rc_inner = ppr_parse_inner_l2_l3_l4(m, h, ofs);
+                int rc_inner = wpr_parse_inner_l2_l3_l4(m, h, ofs);
                 if (rc_inner < 0)
                     return rc_inner;                
             }
@@ -801,10 +801,10 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
         } else if (nh == IPPROTO_TCP) {
             //parse or bail
             struct rte_tcp_hdr th;
-            if (!ppr_mbuf_read(m, ofs, sizeof(th), &th)) {
+            if (!wpr_mbuf_read(m, ofs, sizeof(th), &th)) {
                 return -44;
             };
-            h->l4_type           = PPR_L4_TCP;
+            h->l4_type           = WPR_L4_TCP;
             h->outer_l4_src_port = rte_be_to_cpu_16(th.src_port);
             h->outer_l4_dst_port = rte_be_to_cpu_16(th.dst_port);
         
@@ -812,21 +812,21 @@ __rte_noinline int ppr_parse_headers_slow(const struct rte_mbuf *m, ppr_hdrs_t *
         } else if (nh == IPPROTO_SCTP) {
             //parse or bail
             struct rte_sctp_hdr sh;
-            if (!ppr_mbuf_read(m, ofs, sizeof(sh), &sh)) {
+            if (!wpr_mbuf_read(m, ofs, sizeof(sh), &sh)) {
                 return -45;
             }
-            h->l4_type           = PPR_L4_SCTP;
+            h->l4_type           = WPR_L4_SCTP;
             h->outer_l4_src_port = rte_be_to_cpu_16(sh.src_port);
             h->outer_l4_dst_port = rte_be_to_cpu_16(sh.dst_port);
         
         //if we are ICMPv6
         } else if (nh == IPPROTO_ICMPV6) {
             //parse or bail
-            ppr_icmp6_min_t ic6;
-            if (!ppr_mbuf_read(m, ofs, sizeof(ic6), &ic6)) {
+            wpr_icmp6_min_t ic6;
+            if (!wpr_mbuf_read(m, ofs, sizeof(ic6), &ic6)) {
                 return -46;
             }
-            h->l4_type         = PPR_L4_ICMP6;
+            h->l4_type         = WPR_L4_ICMP6;
             h->outer_icmp_type = ic6.icmp6_type;
             h->outer_icmp_code = ic6.icmp6_code;
         }

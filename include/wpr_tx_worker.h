@@ -27,7 +27,7 @@ Description: header file for tx worker code
 #include <rte_mempool.h>
 #include <limits.h>
 
-#include "ppr_pcap_loader.h"
+#include "wpr_pcap_loader.h"
 
 #define CACHE_LINE 64
 #define BURST_SIZE_MAX  256
@@ -37,20 +37,20 @@ Description: header file for tx worker code
 /* ------------------------------- Virtual Client Structs ---------------------------------------- */
 
 //how to set the start time for a virtual client
-typedef enum ppr_vc_start_mode {
+typedef enum wpr_vc_start_mode {
     VC_START_RANDOM_INDEX = 0,
     VC_START_FIXED_INDEX  = 2,
-} ppr_vc_start_mode_t;
+} wpr_vc_start_mode_t;
 
 //how to pace the virtual client transmissions
-typedef enum ppr_vc_pace_mode {
+typedef enum wpr_vc_pace_mode {
     VC_PACE_NONE = 0,      // blast
     VC_PACE_PCAP_TS = 1,   // follow capture deltas
-} ppr_vc_pace_mode_t;
+} wpr_vc_pace_mode_t;
 
 
 // identity profile for a virtual client
-typedef struct ppr_vc_identity_profile {
+typedef struct wpr_vc_identity_profile {
     // inclusive ranges (host byte order)
     uint32_t src_ip_lo, src_ip_hi;
     uint32_t dst_ip_lo, dst_ip_hi;
@@ -61,11 +61,11 @@ typedef struct ppr_vc_identity_profile {
     uint8_t  src_mac_base[6];
     uint8_t  dst_mac_base[6];
     uint32_t mac_stride; 
-} ppr_vc_identity_profile_t;
+} wpr_vc_identity_profile_t;
 
 
 //track a virtual client context 
-typedef struct __attribute__((aligned(CACHE_LINE))) ppr_vc_ctx {
+typedef struct __attribute__((aligned(CACHE_LINE))) wpr_vc_ctx {
     // ---- hot fields ----
     uint32_t start_idx;           // chosen at init
     uint32_t pcap_idx;            // current index
@@ -89,18 +89,18 @@ typedef struct __attribute__((aligned(CACHE_LINE))) ppr_vc_ctx {
     uint32_t local_client_idx;
     uint32_t global_client_id;
     
-} ppr_vc_ctx_t;
+} wpr_vc_ctx_t;
 
 
 //map workers to ports they serve
-typedef struct ppr_port_worker_map {
+typedef struct wpr_port_worker_map {
     uint16_t W;       // workers serving this port
     uint16_t rank;    // my rank within those workers [0..W-1]
-} ppr_port_worker_map_t;
+} wpr_port_worker_map_t;
 
 
 //handle coordination of port streams and their virtual clients across all workers
-typedef struct ppr_port_stream_global {
+typedef struct wpr_port_stream_global {
     //how many vc clients are active on this port
     _Atomic uint32_t active_clients; 
 
@@ -111,8 +111,8 @@ typedef struct ppr_port_stream_global {
     uint64_t run_seed;
 
     // per-port VC config 
-    ppr_vc_pace_mode_t pace_mode;
-    ppr_vc_start_mode_t start_mode;
+    wpr_vc_pace_mode_t pace_mode;
+    wpr_vc_start_mode_t start_mode;
     uint32_t stream_start_index; // for FIXED_INDEX mode
 
 
@@ -120,26 +120,26 @@ typedef struct ppr_port_stream_global {
     _Atomic uint64_t global_start_ns;
     uint64_t replay_window_ns;    // period
 
-    ppr_vc_identity_profile_t idp;
-} ppr_port_stream_global_t;
+    wpr_vc_identity_profile_t idp;
+} wpr_port_stream_global_t;
 
 
-typedef struct __attribute__((aligned(64))) ppr_port_stream_ctx {
+typedef struct __attribute__((aligned(64))) wpr_port_stream_ctx {
     // virtual clients for THIS port stream
-    ppr_vc_ctx_t *clients;
+    wpr_vc_ctx_t *clients;
     uint32_t num_clients;
     uint32_t last_start_gid;
     uint32_t last_count;
 
     //global port stream config pointer
-    ppr_port_stream_global_t *global_cfg;
+    wpr_port_stream_global_t *global_cfg;
 
     // pacing / scheduling knobs
     uint32_t rr_next_client;      // round-robin pointer
-} ppr_port_stream_ctx_t;
+} wpr_port_stream_ctx_t;
 
 
-typedef struct __attribute__((aligned(64))) ppr_tx_worker_ctx {
+typedef struct __attribute__((aligned(64))) wpr_tx_worker_ctx {
     uint32_t worker_id;
     uint64_t run_seed;
 
@@ -147,12 +147,12 @@ typedef struct __attribute__((aligned(64))) ppr_tx_worker_ctx {
     uint16_t num_ports;
 
     // one stream ctx per port-id for O(1)
-    ppr_port_stream_ctx_t port_stream[MAX_PORTS];
-    ppr_port_worker_map_t map_by_port[MAX_PORTS];
+    wpr_port_stream_ctx_t port_stream[MAX_PORTS];
+    wpr_port_worker_map_t map_by_port[MAX_PORTS];
     uint16_t queue_id_by_port[MAX_PORTS];
 
     const void *action_table;
-} ppr_tx_worker_ctx_t;
+} wpr_tx_worker_ctx_t;
 
 
 /** 
@@ -163,7 +163,7 @@ typedef struct __attribute__((aligned(64))) ppr_tx_worker_ctx {
 * @param start Pointer to store start index
 * @param count Pointer to store count of items for this worker
 **/
-static inline void ppr_vc_slice(uint32_t N, uint16_t W, uint16_t rank,
+static inline void wpr_vc_slice(uint32_t N, uint16_t W, uint16_t rank,
                             uint32_t *start, uint32_t *count)
 {
     uint32_t base = (W ? (N / W) : 0);
@@ -183,8 +183,8 @@ static inline uint32_t span_u16(uint16_t lo, uint16_t hi) {
     return (hi >= lo) ? (uint32_t)(hi - lo + 1) : 1;
 }
 
-static inline void vc_materialize_identity(ppr_vc_ctx_t *vc,
-                                           const ppr_vc_identity_profile_t *idp,
+static inline void vc_materialize_identity(wpr_vc_ctx_t *vc,
+                                           const wpr_vc_identity_profile_t *idp,
                                            uint16_t port_id,          // optional: salt uniqueness per port
                                            uint32_t global_vc_id)
 {

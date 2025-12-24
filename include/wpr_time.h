@@ -1,9 +1,9 @@
-#ifndef PPR_TIME_H
-#define PPR_TIME_H
+#ifndef WPR_TIME_H
+#define WPR_TIME_H
 
 #define MIN_SLEEP_NS  (50 * 1000) // 50 us
 
-static inline uint64_t ppr_now_ns(void)
+static inline uint64_t wpr_now_ns(void)
 {
     const uint64_t tsc    = rte_get_tsc_cycles();
     const uint64_t tsc_hz = rte_get_tsc_hz();
@@ -32,4 +32,4 @@ static inline double tsc_to_ms(uint64_t tsc)
 }
 
 
-#endif // PPR_TIME_Hs
+#endif // WPR_TIME_Hs

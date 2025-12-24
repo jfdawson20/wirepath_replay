@@ -2,7 +2,7 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
-Filename: ppr_pcap_loader_rpc.c
+Filename: wpr_pcap_loader_rpc.c
 Description:
   RPC helpers for interacting with the pcap_loader thread and querying loaded PCAP slots.
 
@@ -18,27 +18,27 @@ Description:
 #include <errno.h>
 #include <stdatomic.h>
 
-#include "ppr_pcap_loader_rpc.h"
-#include "ppr_pcap_loader.h"
-#include "ppr_app_defines.h"
-#include "ppr_ports.h"
-#include "ppr_tx_worker.h"
-#include "ppr_log.h"
+#include "wpr_pcap_loader_rpc.h"
+#include "wpr_pcap_loader.h"
+#include "wpr_app_defines.h"
+#include "wpr_ports.h"
+#include "wpr_tx_worker.h"
+#include "wpr_log.h"
 
 
 /* --- Internal helpers --- */
 
-static inline uint32_t ppr_pcap_storage_published_count(const pcap_storage_t *st)
+static inline uint32_t wpr_pcap_storage_published_count(const pcap_storage_t *st)
 {
     /* Acquire not strictly required for the integer itself, but it's fine. */
     uint32_t n = atomic_load_explicit(&st->published_count, memory_order_acquire);
-    if (n > PPR_MAX_PCAP_SLOTS) n = PPR_MAX_PCAP_SLOTS;
+    if (n > WPR_MAX_PCAP_SLOTS) n = WPR_MAX_PCAP_SLOTS;
     return n;
 }
 
-static inline struct pcap_mbuff_slot *ppr_pcap_storage_get_slot(const pcap_storage_t *st, uint32_t slotid)
+static inline struct pcap_mbuff_slot *wpr_pcap_storage_get_slot(const pcap_storage_t *st, uint32_t slotid)
 {
-    if (slotid >= PPR_MAX_PCAP_SLOTS) return NULL;
+    if (slotid >= WPR_MAX_PCAP_SLOTS) return NULL;
     return atomic_load_explicit(&st->slots[slotid], memory_order_acquire);
 }
 
@@ -50,12 +50,12 @@ static inline struct pcap_mbuff_slot *ppr_pcap_storage_get_slot(const pcap_stora
    - first/last/delta timestamps
    - size in bytes
 */
-int ppr_get_loaded_pcaps_list(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args)
+int wpr_get_loaded_pcaps_list(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args)
 {
     (void)args;
 
     if (!reply_root || !thread_args || !thread_args->pcap_storage) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to ppr_get_loaded_pcaps_list\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to wpr_get_loaded_pcaps_list\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
@@ -64,13 +64,13 @@ int ppr_get_loaded_pcaps_list(json_t *reply_root, json_t *args, ppr_thread_args_
 
     /* published_count is monotonic allocation count; some slots may be NULL if a load failed before publish.
        We'll count only non-NULL published slots in the output list. */
-    uint32_t max_slots = ppr_pcap_storage_published_count(st);
+    uint32_t max_slots = wpr_pcap_storage_published_count(st);
 
     json_t *arr = json_array();
     int active = 0;
 
     for (uint32_t i = 0; i < max_slots; i++) {
-        struct pcap_mbuff_slot *slot = ppr_pcap_storage_get_slot(st, i);
+        struct pcap_mbuff_slot *slot = wpr_pcap_storage_get_slot(st, i);
         if (!slot)
             continue;
 
@@ -98,7 +98,7 @@ int ppr_get_loaded_pcaps_list(json_t *reply_root, json_t *args, ppr_thread_args_
 /* check for pcap loading complete - polls pcap thread control structure
    returns 0 if busy and 1 if done. slot ID loaded and result (error) returned in pointers
 */
-static int check_pcap_status(ppr_thread_args_t *thread_args, int *result, unsigned int *slot)
+static int check_pcap_status(wpr_thread_args_t *thread_args, int *result, unsigned int *slot)
 {
     int done = 0;
 
@@ -114,7 +114,7 @@ static int check_pcap_status(ppr_thread_args_t *thread_args, int *result, unsign
 }
 
 /* Primary pcap load command handler. Kicks the pcap_loader pthread and blocks until complete. */
-int ppr_load_pcap_file(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args)
+int wpr_load_pcap_file(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args)
 {
     if (!reply_root || !args || !thread_args || !thread_args->pcap_controller || !thread_args->pcap_storage) {
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
@@ -161,7 +161,7 @@ int ppr_load_pcap_file(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
     /* Validate slot publication if load succeeded */
     int numpackets = 0;
     if (pcap_error == 0) {
-        struct pcap_mbuff_slot *slot = ppr_pcap_storage_get_slot(thread_args->pcap_storage, slotid);
+        struct pcap_mbuff_slot *slot = wpr_pcap_storage_get_slot(thread_args->pcap_storage, slotid);
         if (!slot) {
             /* This should not happen if loader publishes slot before setting result=0,
                but handle defensively. */
@@ -178,11 +178,11 @@ int ppr_load_pcap_file(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
 
     /* Optional debug print of all currently published slots */
     {
-        uint32_t max_slots = ppr_pcap_storage_published_count(thread_args->pcap_storage);
-        printf("pcap loader: published_count=%u (max=%u)\n", max_slots, (unsigned)PPR_MAX_PCAP_SLOTS);
+        uint32_t max_slots = wpr_pcap_storage_published_count(thread_args->pcap_storage);
+        printf("pcap loader: published_count=%u (max=%u)\n", max_slots, (unsigned)WPR_MAX_PCAP_SLOTS);
 
         for (uint32_t i = 0; i < max_slots; i++) {
-            struct pcap_mbuff_slot *s = ppr_pcap_storage_get_slot(thread_args->pcap_storage, i);
+            struct pcap_mbuff_slot *s = wpr_pcap_storage_get_slot(thread_args->pcap_storage, i);
             if (!s) continue;
             printf("Slot %u - File Loaded: %s, NumPackets: %u, Bytes: %lu\n",
                    i, s->pcap_name, s->numpackets, (unsigned long)s->size_in_bytes);
@@ -200,22 +200,22 @@ int ppr_load_pcap_file(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
 * @param result
 *   Pointer to integer to store result code (0=success, negative=error).
 **/
-int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args)
+int wpr_assign_port_slot(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args)
 {
 
     if (!reply_root || !args || !thread_args || !thread_args->pcap_storage || !thread_args->global_port_list) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to ppr_assign_port_slot\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to wpr_assign_port_slot\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
 
     pcap_storage_t *st = thread_args->pcap_storage;
-    ppr_ports_t *port_list = thread_args->global_port_list;
+    wpr_ports_t *port_list = thread_args->global_port_list;
 
     //extract port number from command
     json_t *jportname = json_object_get(args, "port");
     if (!jportname) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'port' argument in ppr_assign_port_slot\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'port' argument in wpr_assign_port_slot\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
@@ -223,9 +223,9 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
 
 
     //validate port entry exists
-    ppr_port_entry_t *port_entry = ppr_find_port_byname(port_list, portname);
+    wpr_port_entry_t *port_entry = wpr_find_port_byname(port_list, portname);
     if (!port_entry) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: could not find port entry for port name '%s'\n", portname);
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: could not find port entry for port name '%s'\n", portname);
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
     }
@@ -233,7 +233,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //extract slot id from command
     json_t *jslotid = json_object_get(args, "slotid");
     if (!jslotid) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'slotid' argument in ppr_assign_port_slot\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'slotid' argument in wpr_assign_port_slot\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
@@ -242,7 +242,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //validate slot exists
     uint32_t max_published_slots = atomic_load_explicit(&st->published_count, memory_order_acquire);
     if ((uint32_t)slotid >= max_published_slots) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: requested slotid %d is out of range (max published slots %u)\n",
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: requested slotid %d is out of range (max published slots %u)\n",
                 slotid, max_published_slots);
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
@@ -251,27 +251,27 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     //get pointer to slot entry 
     pcap_mbuff_slot_t *slot_entry = atomic_load_explicit(&st->slots[slotid], memory_order_acquire);
     if (slot_entry == NULL) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: requested slotid %d is not loaded\n", slotid);
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: requested slotid %d is not loaded\n", slotid);
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
     }
 
     //extract pace mode from command 
     json_t *jpace_mode = json_object_get(args, "pace_mode");
-    ppr_vc_pace_mode_t pace_mode = VC_PACE_NONE;
+    wpr_vc_pace_mode_t pace_mode = VC_PACE_NONE;
     if (jpace_mode) {
-        pace_mode = (ppr_vc_pace_mode_t)json_integer_value(jpace_mode);
+        pace_mode = (wpr_vc_pace_mode_t)json_integer_value(jpace_mode);
     }
     else { 
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "No pace mode provided, defaulting to VC_PACE_NONE\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_DEBUG, "No pace mode provided, defaulting to VC_PACE_NONE\n");
     }
 
     //extract start mode from command
     json_t *jstart_mode = json_object_get(args, "start_mode");
-    ppr_vc_start_mode_t start_mode = VC_START_FIXED_INDEX; //default
+    wpr_vc_start_mode_t start_mode = VC_START_FIXED_INDEX; //default
     uint32_t start_index = 0;
     if (jstart_mode) {
-        start_mode = (ppr_vc_start_mode_t)json_integer_value(jstart_mode);
+        start_mode = (wpr_vc_start_mode_t)json_integer_value(jstart_mode);
 
         //if start mode is fixed index, extract fixed index value
         if (start_mode == VC_START_FIXED_INDEX){
@@ -280,16 +280,16 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
                 start_index = (uint32_t)json_integer_value(jfixed_index);
             }
             else {
-                PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "No fixed index provided for VC_START_FIXED_INDEX mode, default to 0\n");
+                WPR_LOG(WPR_LOG_RPC, RTE_LOG_DEBUG, "No fixed index provided for VC_START_FIXED_INDEX mode, default to 0\n");
             }
         }
     }
     else {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "No start mode provided, defaulting to VC_START_FIXED_INDEX - 0\n");   
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_DEBUG, "No start mode provided, defaulting to VC_START_FIXED_INDEX - 0\n");   
     }
 
     if (start_mode == VC_START_FIXED_INDEX && start_index >= slot_entry->numpackets){
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: fixed index %u is out of bounds for pcap slot %d with %u packets\n", 
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: fixed index %u is out of bounds for pcap slot %d with %u packets\n", 
                 start_index, slotid, (unsigned int)slot_entry->numpackets);
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
@@ -303,7 +303,7 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     }
 
     if (pace_mode == VC_PACE_PCAP_TS && replay_window_sec == 0){
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: replay window must be > 0 for VC_PACE_PCAP_TS mode\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: replay window must be > 0 for VC_PACE_PCAP_TS mode\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
@@ -315,9 +315,9 @@ int ppr_assign_port_slot(json_t *reply_root, json_t *args, ppr_thread_args_t *th
     atomic_store_explicit(&port_entry->tx_enabled, false, memory_order_release); 
 
     //2) assign the slot to the global port stream
-    ppr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
+    wpr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
     if(port_streams == NULL){
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: port stream global config is NULL in ppr_assign_port_slot\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: port stream global config is NULL in wpr_assign_port_slot\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }

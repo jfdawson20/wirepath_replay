@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-ppr_acl.py - Friendly Python wrapper for PPR ACL JSON RPC API.
+wpr_acl.py - Friendly Python wrapper for WPR ACL JSON RPC API.
 
 Depends on:
-  - WpsControlClient from your ppr_cli.py (adjust import as needed)
+  - WpsControlClient from your wpr_cli.py (adjust import as needed)
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ import socket
 import argparse
 from prettytable import PrettyTable
 
-from ppr_cli import WpsControlClient, WpsControlError  # adjust path if needed
+from wpr_cli import WpsControlClient, WpsControlError  # adjust path if needed
 
 
 # ---------------------------------------------------------------------------
 # Basic mappings / helpers
 # ---------------------------------------------------------------------------
 
-# These must match your C enum ppr_flow_action_kind_t
+# These must match your C enum wpr_flow_action_kind_t
 ACTION_NAME_TO_ID: Dict[str, int] = {
     "FLOW_ACT_NOOP": 0, 
     "FLOW_ACT_DROP": 1,       
@@ -125,7 +125,7 @@ class AclAction:
     default_policy: Union[int, str] = "FLOW_ACT_DROP"
 
     def to_wire(self) -> Dict[str, Any]:
-        """Convert to the JSON shape expected by ppr_acl_action_from_json()."""
+        """Convert to the JSON shape expected by wpr_acl_action_from_json()."""
         if isinstance(self.default_policy, str):
             name = self.default_policy.upper()
             if name not in ACTION_NAME_TO_ID:
@@ -309,12 +309,12 @@ class WpsAclClient:
     High-level wrapper around the ACL JSON RPC commands.
     """
 
-    CMD_GET_DB = "ppr_cmd_get_acl_db"
-    CMD_ADD_RULE = "ppr_cmd_add_acl_rule"
-    CMD_UPDATE_RULE = "ppr_cmd_update_acl_rule"
-    CMD_DELETE_RULE = "ppr_cmd_delete_acl_rule"
-    CMD_CHECK_STATUS = "ppr_cmd_check_acl_status"
-    CMD_COMMIT = "ppr_cmd_acl_db_commit"
+    CMD_GET_DB = "wpr_cmd_get_acl_db"
+    CMD_ADD_RULE = "wpr_cmd_add_acl_rule"
+    CMD_UPDATE_RULE = "wpr_cmd_update_acl_rule"
+    CMD_DELETE_RULE = "wpr_cmd_delete_acl_rule"
+    CMD_CHECK_STATUS = "wpr_cmd_check_acl_status"
+    CMD_COMMIT = "wpr_cmd_acl_db_commit"
 
     def __init__(self, ctl: WpsControlClient) -> None:
         self.ctl = ctl

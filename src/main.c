@@ -3,7 +3,7 @@ SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
 Filename: main.c 
-Description: The PPR application is a DPDK based pcap replay tool designed for high performance traffic generation from pcap files. Its built around the concept of dynamic 
+Description: The WPR application is a DPDK based pcap replay tool designed for high performance traffic generation from pcap files. Its built around the concept of dynamic 
 traffic expansion via virtual clients, where a single pcap flow can be expanded into multiple flows by modifying packet headers on the fly. The main.c file contains the 
 primary entry point for the DPDK application, handling initialization of DPDK EAL, loading configuration files, launching worker threads 
 (control server, stats monitor, pcap loader, tx workers, buffer workers), and managing application shutdown.
@@ -37,18 +37,18 @@ primary entry point for the DPDK application, handling initialization of DPDK EA
 #include <arpa/inet.h>  // inet_pton, ntohl, htonl
 #include <signal.h>
 
-#include "ppr_control.h"
-#include "ppr_app_defines.h"
-#include "ppr_ports.h"
-#include "ppr_stats.h"
-#include "ppr_tx_worker.h"
-#include "ppr_buff_worker.h"
-#include "ppr_mbuf_fields.h"
-#include "ppr_pcap_loader.h"
-#include "ppr_config.h"
-#include "ppr_acl.h"
-#include "ppr_acl_db.h"
-#include "ppr_acl_yaml.h"
+#include "wpr_control.h"
+#include "wpr_app_defines.h"
+#include "wpr_ports.h"
+#include "wpr_stats.h"
+#include "wpr_tx_worker.h"
+#include "wpr_buff_worker.h"
+#include "wpr_mbuf_fields.h"
+#include "wpr_pcap_loader.h"
+#include "wpr_config.h"
+#include "wpr_acl.h"
+#include "wpr_acl_db.h"
+#include "wpr_acl_yaml.h"
 
 //global force quit 
 volatile sig_atomic_t force_quit = 0;
@@ -60,23 +60,23 @@ static void signal_handler(int signum)
 }
 
 //global error flag 
-_Atomic int ppr_fatal_error = 0;
+_Atomic int wpr_fatal_error = 0;
 
-void ppr_fatal(const char *fmt, ...)
+void wpr_fatal(const char *fmt, ...)
 {
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_CRIT, "FATAL ERROR: %s", fmt);
-    atomic_store_explicit(&ppr_fatal_error, 1, memory_order_release);
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_CRIT, "FATAL ERROR: %s", fmt);
+    atomic_store_explicit(&wpr_fatal_error, 1, memory_order_release);
     force_quit = 1;
     
 }
 
-/* Declared in ppr_config.c main yaml parsing config schema */
-extern const cyaml_schema_value_t ppr_config_schema;
+/* Declared in wpr_config.c main yaml parsing config schema */
+extern const cyaml_schema_value_t wpr_config_schema;
 
 /* Main entry point for DPDK application */
 int main(int argc, char **argv) {
 
-    int ppr_rc = 0; 
+    int wpr_rc = 0; 
 
     //app ready is an atomic bool used to signal worker threads when app init is complete and safe to start
     _Atomic bool app_ready;
@@ -88,8 +88,8 @@ int main(int argc, char **argv) {
     pthread_t stats_thread; 
     pthread_t pcap_loader_thread; 
 
-    //start init, note we use PPR_LOG macro defined in ppr_log.h for all logging, this allows for different log levels and per module logging control
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\nPcap Replay Application Starting\n\n");
+    //start init, note we use WPR_LOG macro defined in wpr_log.h for all logging, this allows for different log levels and per module logging control
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "\nPcap Replay Application Starting\n\n");
 
     /* Install signal handlers for clean shutdown */
     struct sigaction sa;
@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
 
 
     /* ------------------------------------------------------ Init DPDK EAL ----------------------------------------------------------------- */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing DPDK EAL ###############################\n\n");
     //for any DPDK app, first thing we do is initialize the EAL (Environment Abstraction Layer) which sets up hugepages, memory, PMD's etc. 
     int ret = rte_eal_init(argc, argv);
@@ -128,8 +128,8 @@ int main(int argc, char **argv) {
 
     /* ------------------------------------------------------ Load config yaml file  --------------------------------------------------------- */
     //load application config from yaml file specified on command line, yaml parsing is done using libcymal library
-    //libcyaml config schema is defined in ppr_config.c and ppr_config.h 
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    //libcyaml config schema is defined in wpr_config.c and wpr_config.h 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Loading Application Configuration ###############################\n\n");
 
     //get config file path from eal arguments 
@@ -141,29 +141,29 @@ int main(int argc, char **argv) {
         }
     }
 
-    //use libcymal to parse log file into ppr_config_t struct 
+    //use libcymal to parse log file into wpr_config_t struct 
     const cyaml_config_t cyaml_cfg = {
         .log_level = CYAML_LOG_WARNING,       /* adjust for debug */
         .mem_fn    = cyaml_mem,               /* default allocators */
         .log_fn    = cyaml_log,               /* default logger */
     };
-    ppr_config_t *ppr_app_cfg = NULL;
-    cyaml_err_t err = cyaml_load_file(config_file, &cyaml_cfg, &ppr_config_schema, (cyaml_data_t **)&ppr_app_cfg, NULL);
+    wpr_config_t *wpr_app_cfg = NULL;
+    cyaml_err_t err = cyaml_load_file(config_file, &cyaml_cfg, &wpr_config_schema, (cyaml_data_t **)&wpr_app_cfg, NULL);
     if (err != CYAML_OK) {
         rte_exit(EXIT_FAILURE, "Cannot parse yaml config file %s\n",config_file);
     }
     
 
-    unsigned int tx_cores      = ppr_app_cfg->thread_settings.tx_cores;
-    unsigned int base_lcore_id = ppr_app_cfg->thread_settings.base_lcore_id;
+    unsigned int tx_cores      = wpr_app_cfg->thread_settings.tx_cores;
+    unsigned int base_lcore_id = wpr_app_cfg->thread_settings.base_lcore_id;
 
     /* ------------------------------------------------------ Configure DPDK RCU QSBR Struct ---------------------------------------------------*/
-    //multiple subsystems in ppr use RCU QSBR for safe memory reclamation of deferred objects (e.g. retired flow actions, load balancer nodes, etc.)
+    //multiple subsystems in wpr use RCU QSBR for safe memory reclamation of deferred objects (e.g. retired flow actions, load balancer nodes, etc.)
     //here we create the main RCU QSBR structure that will be shared with these subsystems. The RCU QSBR structure must know how many reader threads will be using it, so
     //we pass in the number of worker threads from config file. Note, the flow table manager thread is not a reader, so not included in this count.
     
-    ppr_rcu_ctx_t *rcu_ctx = rte_zmalloc_socket("ppr_rcu_ctx",
-                                sizeof(ppr_rcu_ctx_t),
+    wpr_rcu_ctx_t *rcu_ctx = rte_zmalloc_socket("wpr_rcu_ctx",
+                                sizeof(wpr_rcu_ctx_t),
                                 RTE_CACHE_LINE_SIZE,
                                 socket_id);
     if (!rcu_ctx){
@@ -171,7 +171,7 @@ int main(int argc, char **argv) {
     }
 
     size_t qs_size = rte_rcu_qsbr_get_memsize(tx_cores);
-    rcu_ctx->qs = rte_zmalloc_socket("ppr_rcu_qsbr",
+    rcu_ctx->qs = rte_zmalloc_socket("wpr_rcu_qsbr",
                                 qs_size,
                                 RTE_CACHE_LINE_SIZE,
                                 socket_id);
@@ -189,9 +189,9 @@ int main(int argc, char **argv) {
     rcu_ctx->num_readers = tx_cores;
 
     /* ------------------------------------------------------ Initialize Mempools ---------------------------------------------------------------- */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing Mempools ###############################\n\n"); 
-    size_t priv_sz = RTE_ALIGN_CEIL(sizeof(ppr_priv_t), RTE_CACHE_LINE_SIZE);
+    size_t priv_sz = RTE_ALIGN_CEIL(sizeof(wpr_priv_t), RTE_CACHE_LINE_SIZE);
     
     struct rte_mempool *pcap_mempool = NULL;
     struct rte_mempool **copy_mempools = rte_zmalloc("copy_mempools_array",
@@ -202,8 +202,8 @@ int main(int argc, char **argv) {
     }
 
     //initialize each mempool from config file settings
-    for (unsigned int i=0; i < ppr_app_cfg->mempool_settings_count; i++){
-        ppr_mempool_t *mpool_cfg = &ppr_app_cfg->mempool_settings[i];
+    for (unsigned int i=0; i < wpr_app_cfg->mempool_settings_count; i++){
+        wpr_mempool_t *mpool_cfg = &wpr_app_cfg->mempool_settings[i];
 
         //create the global pcap storage mempool 
         if (strcmp(mpool_cfg->name, "global_pcap_mempool") == 0){
@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
             if (pcap_mempool == NULL)
                 rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",mpool_cfg->name);
 
-            PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Created global pcap mempool %s with %u entries\n",
+            WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Created global pcap mempool %s with %u entries\n",
                 mpool_cfg->name, mpool_cfg->mpool_entries);
 
         }
@@ -228,7 +228,7 @@ int main(int argc, char **argv) {
                 if (copy_mempools[i] == NULL)
                     rte_exit(EXIT_FAILURE, "Cannot create mbuf pool %s\n",mempool_name);
 
-                PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Created copy mempool %s with %u entries\n",
+                WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Created copy mempool %s with %u entries\n",
                     mempool_name, mpool_cfg->mpool_entries);
             }
         }
@@ -239,15 +239,15 @@ int main(int argc, char **argv) {
     }   
 
     /* ------------------------------------------------------ Configure ports --------------------------------------------------------------- */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing Network Ports ###############################\n\n");
     
     //temporary variable to track total number of ports added to global port list
     unsigned int total_port_count = 0;
 
     //create the global port list array 
-    ppr_ports_t *global_port_list = NULL;
-    ppr_port_list_init(&global_port_list);
+    wpr_ports_t *global_port_list = NULL;
+    wpr_port_list_init(&global_port_list);
     if (global_port_list == NULL){
         rte_exit(EXIT_FAILURE, "Cannot create global port list\n");
     }
@@ -258,21 +258,21 @@ int main(int argc, char **argv) {
     //queues to accomplish this. If not we request the maximum number of rx/tx queues per port and round robin assign them to worker cores (next step)
     
     //for each port specified in config file, initialize the port and add to global port list
-    for (unsigned int i=0; i < ppr_app_cfg->port_settings_count; i++){
+    for (unsigned int i=0; i < wpr_app_cfg->port_settings_count; i++){
         
-        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Initializing NIC port %s\n",ppr_app_cfg->port_settings[i].name);
-        ppr_port_t *port_cfg = &ppr_app_cfg->port_settings[i];
+        WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Initializing NIC port %s\n",wpr_app_cfg->port_settings[i].name);
+        wpr_port_t *port_cfg = &wpr_app_cfg->port_settings[i];
 
         /* -------------------------------- Initialize NIC Port from Config File ---------------------------------*/
         //convert pci bus address string to port id
         uint16_t dpdk_port_id;
-        ppr_rc = ppr_get_port_id_by_pci_addr(port_cfg->pci_bus_addr, &dpdk_port_id);
-        if (ppr_rc != 0){
+        wpr_rc = wpr_get_port_id_by_pci_addr(port_cfg->pci_bus_addr, &dpdk_port_id);
+        if (wpr_rc != 0){
             rte_exit(EXIT_FAILURE, "Cannot find port with pci bus address %s\n",port_cfg->pci_bus_addr);
         }
         
         //build a port config struct 
-        ppr_portinit_cfg_t port_init_cfg;
+        wpr_portinit_cfg_t port_init_cfg;
 
         //we exclude our special manager worker core from normal port init since it won't directly interact with physical ports 
         uint16_t num_rx_queues = tx_cores;
@@ -288,49 +288,49 @@ int main(int argc, char **argv) {
         port_init_cfg.tx_multiseg_offload = port_cfg->tx_multiseg_offload;
 
         //add port list entry first with queues set to zero, init function will populate actual number of queues created and other metadata
-        ppr_rc = ppr_portlist_add(global_port_list, port_cfg->name, dpdk_port_id, true, PPR_PORT_TYPE_ETHQ, num_rx_queues,num_tx_queues,PPR_PORT_RXTX);
-        if (ppr_rc != 0){
+        wpr_rc = wpr_portlist_add(global_port_list, port_cfg->name, dpdk_port_id, true, WPR_PORT_TYPE_ETHQ, num_rx_queues,num_tx_queues,WPR_PORT_RXTX);
+        if (wpr_rc != 0){
             rte_exit(EXIT_FAILURE, "Cannot add port %s to global port list\n",port_cfg->name);
         }
 
-        ppr_port_entry_t *port_entry = ppr_find_port_byid(global_port_list, dpdk_port_id);
+        wpr_port_entry_t *port_entry = wpr_find_port_byid(global_port_list, dpdk_port_id);
         if (port_entry == NULL){
             rte_exit(EXIT_FAILURE, "Cannot find port entry for port %s after adding to global port list\n",port_cfg->name);
         }
 
         //initialize port and record the number of rx/tx queues that were actually created
-        if (ppr_port_init(port_entry,dpdk_port_id, pcap_mempool, &port_init_cfg) != 0){
+        if (wpr_port_init(port_entry,dpdk_port_id, pcap_mempool, &port_init_cfg) != 0){
                 rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu16 "\n",dpdk_port_id);
         }
 
         //initialize port stats
-        ppr_port_stats_init(port_entry);
+        wpr_port_stats_init(port_entry);
 
         //this is the index we use to reference this port externally in egress tables etc.
         uint16_t global_port_index = port_entry->global_port_index;
 
         total_port_count++;
-        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Successfully initialized port %s with DPDK port ID %"PRIu16" and global port index %"PRIu16"\n", 
+        WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Successfully initialized port %s with DPDK port ID %"PRIu16" and global port index %"PRIu16"\n", 
             port_cfg->name, dpdk_port_id, global_port_index);
-        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\n");
+        WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "\n");
 
     }
 
-    ppr_portlist_print(global_port_list);
+    wpr_portlist_print(global_port_list);
 
     /* ------------------------------------------------------ Initialize Global Policy Epochs ------------------------------------------------------- */
-    //the PPR application is based around dynamic policy tables (egress table, ACL table etc) that can be updated at runtime.
+    //the WPR application is based around dynamic policy tables (egress table, ACL table etc) that can be updated at runtime.
     //the policy tables are cached in per worker core flow tables for performance. To ensure that worker cores always have the latest policy info,
     //we use an epoch based system. Each global policy table has an associated epoch counter that is incremented each time the table is updated.
     //Each worker core tracks the epoch of each policy table it has cached. When processing packets, if a worker core sees that the global epoch for
     //a given policy table is different than its cached epoch, it knows to refresh its cached policy info from that table. This allows for
     //efficient asynchronous policy updates without locking or complex synchronization between worker cores and control plane threads updating the policy tables.
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing Global Policy Epochs ###############################\n");
     
     //create global policy epochs struct
-    ppr_global_policy_epoch_t *global_policy_epochs = rte_zmalloc_socket("global_policy_epochs",
-                                            sizeof(ppr_global_policy_epoch_t),
+    wpr_global_policy_epoch_t *global_policy_epochs = rte_zmalloc_socket("global_policy_epochs",
+                                            sizeof(wpr_global_policy_epoch_t),
                                             RTE_CACHE_LINE_SIZE,
                                             socket_id);
     if (global_policy_epochs == NULL) {
@@ -348,43 +348,43 @@ int main(int argc, char **argv) {
 
 
     /* ------------------------------------------------------ Initialize ACL Table ---------------------------------------------------------- */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing ACL Table ###############################\n");
     
     //create an ACL database to hold runtime rules issued by the user 
-    ppr_acl_rule_db_t ppr_acl_rules_db; 
-    ppr_acl_rule_db_init (&ppr_acl_rules_db);
+    wpr_acl_rule_db_t wpr_acl_rules_db; 
+    wpr_acl_rule_db_init (&wpr_acl_rules_db);
 
     //create a runtime context for ACL processing 
-    uint32_t acl_qsbr_reclaim_trigger = ppr_app_cfg->acl_table_settings.qsbr_reclaim_size;
-    uint32_t acl_qsbr_reclaim_limit   = ppr_app_cfg->acl_table_settings.qsbr_reclaim_limit;
+    uint32_t acl_qsbr_reclaim_trigger = wpr_app_cfg->acl_table_settings.qsbr_reclaim_size;
+    uint32_t acl_qsbr_reclaim_limit   = wpr_app_cfg->acl_table_settings.qsbr_reclaim_limit;
 
-    ppr_acl_runtime_t ppr_acl_runtime_ctx; 
-    ppr_rc = ppr_acl_runtime_init(&ppr_acl_runtime_ctx, rte_socket_id(), rcu_ctx, global_policy_epochs,acl_qsbr_reclaim_trigger, acl_qsbr_reclaim_limit, tx_cores);
-    if (ppr_rc != 0){
+    wpr_acl_runtime_t wpr_acl_runtime_ctx; 
+    wpr_rc = wpr_acl_runtime_init(&wpr_acl_runtime_ctx, rte_socket_id(), rcu_ctx, global_policy_epochs,acl_qsbr_reclaim_trigger, acl_qsbr_reclaim_limit, tx_cores);
+    if (wpr_rc != 0){
         rte_exit(EXIT_FAILURE, "Failed to initialize ACL runtime context\n");
     }
 
     //if a startup rules file was provided, load it now
-    if (ppr_app_cfg->acl_table_settings.startup_cfg_file != NULL && ppr_app_cfg->acl_table_settings.startup_cfg_file[0] != '\0') {
-        int rc = ppr_acl_load_startup_file(
-            ppr_app_cfg->acl_table_settings.startup_cfg_file,
-            &ppr_acl_rules_db,
+    if (wpr_app_cfg->acl_table_settings.startup_cfg_file != NULL && wpr_app_cfg->acl_table_settings.startup_cfg_file[0] != '\0') {
+        int rc = wpr_acl_load_startup_file(
+            wpr_app_cfg->acl_table_settings.startup_cfg_file,
+            &wpr_acl_rules_db,
             global_port_list,
             NULL);
         if (rc < 0) {
             rte_exit(EXIT_FAILURE, "Failed to load ACL startup rules file %s\n",
-                ppr_app_cfg->acl_table_settings.startup_cfg_file);
+                wpr_app_cfg->acl_table_settings.startup_cfg_file);
         }
     }
 
-    ppr_rc = ppr_acl_db_commit(&ppr_acl_runtime_ctx, &ppr_acl_rules_db);
-    if (ppr_rc != 0){
+    wpr_rc = wpr_acl_db_commit(&wpr_acl_runtime_ctx, &wpr_acl_rules_db);
+    if (wpr_rc != 0){
         rte_exit(EXIT_FAILURE, "Failed to commit loaded ACL rules to runtime\n");
     }
 
     /* ------------------------------------------------------ Pcap Loader Init ----------------------------------------------- */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing Pcap Loader ###############################\n\n");
     pcap_storage_t *global_pcap_storage = rte_zmalloc_socket("global_pcap_storage",
                                         sizeof(pcap_storage_t),
@@ -404,11 +404,11 @@ int main(int argc, char **argv) {
 
 
     /* ------------------------------------------------------ Build Tx Worker Contexts -----------------------------------------------*/
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Initializing TX Worker Contexts ###############################\n\n");
     //create an array to hold all tx worker contexts
-    ppr_tx_worker_ctx_t **tx_worker_ctx_array = rte_zmalloc_socket("tx_worker_ctx_array",
-                                                sizeof(ppr_tx_worker_ctx_t *) * tx_cores,
+    wpr_tx_worker_ctx_t **tx_worker_ctx_array = rte_zmalloc_socket("tx_worker_ctx_array",
+                                                sizeof(wpr_tx_worker_ctx_t *) * tx_cores,
                                                 RTE_CACHE_LINE_SIZE,
                                                 socket_id);
 
@@ -417,8 +417,8 @@ int main(int argc, char **argv) {
     }
 
     //create a per port global stream config array
-    ppr_port_stream_global_t *port_stream_global_cfg = rte_zmalloc_socket("port_stream_global_cfg",
-                                                sizeof(ppr_port_stream_global_t) * global_port_list->num_ports,
+    wpr_port_stream_global_t *port_stream_global_cfg = rte_zmalloc_socket("port_stream_global_cfg",
+                                                sizeof(wpr_port_stream_global_t) * global_port_list->num_ports,
                                                 RTE_CACHE_LINE_SIZE,
                                                 socket_id);
     if (port_stream_global_cfg == NULL){
@@ -426,7 +426,7 @@ int main(int argc, char **argv) {
     }
 
     for (unsigned int port_idx = 0; port_idx < global_port_list->num_ports; port_idx++){
-        ppr_port_stream_global_t *g = &port_stream_global_cfg[port_idx];
+        wpr_port_stream_global_t *g = &port_stream_global_cfg[port_idx];
         g->max_clients = tx_cores * MAX_VC_PER_WORKER;
         g->run_seed = 0; 
         atomic_store_explicit(&g->active_clients, 1, memory_order_release);
@@ -475,8 +475,8 @@ int main(int argc, char **argv) {
 
     //create and initialize each worker context 
     for (unsigned int core_idx = 0; core_idx < tx_cores; core_idx++){
-        tx_worker_ctx_array[core_idx] = rte_zmalloc_socket("ppr_tx_worker_ctx",
-                                                sizeof(ppr_tx_worker_ctx_t),
+        tx_worker_ctx_array[core_idx] = rte_zmalloc_socket("wpr_tx_worker_ctx",
+                                                sizeof(wpr_tx_worker_ctx_t),
                                                 RTE_CACHE_LINE_SIZE,
                                                 socket_id);
         if (tx_worker_ctx_array[core_idx] == NULL){
@@ -490,9 +490,9 @@ int main(int argc, char **argv) {
         for (unsigned int port_idx = 0; port_idx < global_port_list->num_ports; port_idx++){
             
             //initialize per worker/port stream context
-            ppr_port_stream_ctx_t *port_stream = &tx_worker_ctx_array[core_idx]->port_stream[port_idx];
-            port_stream->clients = rte_zmalloc("ppr_vc_ctx_array",
-                                        sizeof(ppr_vc_ctx_t) * MAX_VC_PER_WORKER,
+            wpr_port_stream_ctx_t *port_stream = &tx_worker_ctx_array[core_idx]->port_stream[port_idx];
+            port_stream->clients = rte_zmalloc("wpr_vc_ctx_array",
+                                        sizeof(wpr_vc_ctx_t) * MAX_VC_PER_WORKER,
                                         RTE_CACHE_LINE_SIZE);
             if (port_stream->clients == NULL){
                 rte_exit(EXIT_FAILURE, "Cannot allocate memory for virtual client context array\n");
@@ -506,7 +506,7 @@ int main(int argc, char **argv) {
 
 
             //initialize port map per worker 
-            ppr_port_worker_map_t *map = &tx_worker_ctx_array[core_idx]->map_by_port[port_idx];
+            wpr_port_worker_map_t *map = &tx_worker_ctx_array[core_idx]->map_by_port[port_idx];
             map->W = tx_cores;
             map->rank = core_idx;
 
@@ -519,11 +519,11 @@ int main(int argc, char **argv) {
     }
 
     /* ------------------------------------------------------ Build and Launch Threads -----------------------------------------------*/
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Launching Worker Threads ###############################\n\n");
     /* Worker Tx Threads */
-    ppr_thread_args_t **tx_thread_args_array = rte_zmalloc_socket("tx_thread_args_array",
-                                                sizeof(ppr_thread_args_t *) * tx_cores,
+    wpr_thread_args_t **tx_thread_args_array = rte_zmalloc_socket("tx_thread_args_array",
+                                                sizeof(wpr_thread_args_t *) * tx_cores,
                                                 RTE_CACHE_LINE_SIZE,
                                                 socket_id);
     if (tx_thread_args_array == NULL){
@@ -532,7 +532,7 @@ int main(int argc, char **argv) {
 
     for (unsigned int core_idx = 0; core_idx < tx_cores; core_idx++){
         tx_thread_args_array[core_idx] = rte_zmalloc_socket("tx_thread_args",
-                                                sizeof(ppr_thread_args_t),
+                                                sizeof(wpr_thread_args_t),
                                                 RTE_CACHE_LINE_SIZE,
                                                 socket_id);
         if (tx_thread_args_array[core_idx] == NULL){
@@ -568,15 +568,15 @@ int main(int argc, char **argv) {
         tx_thread_args_array[core_idx]->rcu_ctx          = NULL;       //not used for tx worker
 
         //acl rules interface 
-        tx_thread_args_array[core_idx]->acl_runtime = &ppr_acl_runtime_ctx;
-        tx_thread_args_array[core_idx]->acl_rule_db = &ppr_acl_rules_db;
+        tx_thread_args_array[core_idx]->acl_runtime = &wpr_acl_runtime_ctx;
+        tx_thread_args_array[core_idx]->acl_rule_db = &wpr_acl_rules_db;
     }
 
     //launch non core 0 datapath cores
     for (unsigned int thread_idx = 0; thread_idx < tx_cores; thread_idx++){
         //launch core
         rte_eal_remote_launch(run_tx_worker, tx_thread_args_array[thread_idx], tx_thread_args_array[thread_idx]->core_id);
-        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\tLaunched worker core %d on lcore %d\n", thread_idx, tx_thread_args_array[thread_idx]->core_id);
+        WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "\tLaunched worker core %d on lcore %d\n", thread_idx, tx_thread_args_array[thread_idx]->core_id);
     }
 
 
@@ -586,10 +586,10 @@ int main(int argc, char **argv) {
 
 
     /* Stats pthread */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Launching Stats Manager Thread ###############################\n\n");
-    ppr_thread_args_t *stats_thread_args = rte_zmalloc_socket("stats_thread_args",
-                                        sizeof(ppr_thread_args_t),
+    wpr_thread_args_t *stats_thread_args = rte_zmalloc_socket("stats_thread_args",
+                                        sizeof(wpr_thread_args_t),
                                         RTE_CACHE_LINE_SIZE,
                                         socket_id);
     if (stats_thread_args == NULL){
@@ -625,27 +625,27 @@ int main(int argc, char **argv) {
     stats_thread_args->rcu_ctx          = rcu_ctx;
 
     //acl rules interface
-    stats_thread_args->acl_runtime = &ppr_acl_runtime_ctx;
-    stats_thread_args->acl_rule_db = &ppr_acl_rules_db;
+    stats_thread_args->acl_runtime = &wpr_acl_runtime_ctx;
+    stats_thread_args->acl_rule_db = &wpr_acl_rules_db;
 
 
     //launch stats thread and pin to core 0
-    if (pthread_create(&stats_thread, NULL, run_ppr_stats_thread, stats_thread_args) != 0){
+    if (pthread_create(&stats_thread, NULL, run_wpr_stats_thread, stats_thread_args) != 0){
         rte_exit(EXIT_FAILURE, "stats thread creation failed\n");
     }
     if (pthread_setaffinity_np(stats_thread, sizeof(cpu_set_t), &cpuset) != 0){
         rte_exit(EXIT_FAILURE, "pthread_setaffinity_np failed for stats monitor thread\n");
     }
 
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\t Stats Manager thread launched on core %d\n", main_lcore_id);
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "\t Stats Manager thread launched on core %d\n", main_lcore_id);
 
 
     /* Pcap Loader pthread */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Launching Pcap Loader Thread ###############################\n\n");
 
-    ppr_thread_args_t *pload_thread_args = rte_zmalloc_socket("pload_thread_args",
-                                        sizeof(ppr_thread_args_t),
+    wpr_thread_args_t *pload_thread_args = rte_zmalloc_socket("pload_thread_args",
+                                        sizeof(wpr_thread_args_t),
                                         RTE_CACHE_LINE_SIZE,
                                         socket_id);
     if (pload_thread_args == NULL){
@@ -681,8 +681,8 @@ int main(int argc, char **argv) {
     pload_thread_args->rcu_ctx          = rcu_ctx;
 
     //acl rules interface
-    pload_thread_args->acl_runtime = &ppr_acl_runtime_ctx;
-    pload_thread_args->acl_rule_db = &ppr_acl_rules_db;
+    pload_thread_args->acl_runtime = &wpr_acl_runtime_ctx;
+    pload_thread_args->acl_rule_db = &wpr_acl_rules_db;
 
     //launch stats thread and pin to core 0
     if (pthread_create(&pcap_loader_thread, NULL, run_pcap_loader_thread, pload_thread_args) != 0){
@@ -692,15 +692,15 @@ int main(int argc, char **argv) {
         rte_exit(EXIT_FAILURE, "pthread_setaffinity_np failed for pcap loader monitor thread\n");
     }
 
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\t Pcap Loader thread launched on core %d\n", main_lcore_id);
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "\t Pcap Loader thread launched on core %d\n", main_lcore_id);
 
 
     /* Control Server pthread */
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### Launching Control Server Thread ###############################\n\n");
 
-    ppr_thread_args_t *control_server_thread_args = rte_zmalloc_socket("control_server_thread_args",
-                                        sizeof(ppr_thread_args_t),
+    wpr_thread_args_t *control_server_thread_args = rte_zmalloc_socket("control_server_thread_args",
+                                        sizeof(wpr_thread_args_t),
                                         RTE_CACHE_LINE_SIZE,
                                         socket_id);
     if (control_server_thread_args == NULL){
@@ -735,20 +735,20 @@ int main(int argc, char **argv) {
     control_server_thread_args->rcu_ctx          = rcu_ctx;
 
     //acl rules interface
-    control_server_thread_args->acl_runtime = &ppr_acl_runtime_ctx;
-    control_server_thread_args->acl_rule_db = &ppr_acl_rules_db;
+    control_server_thread_args->acl_runtime = &wpr_acl_runtime_ctx;
+    control_server_thread_args->acl_rule_db = &wpr_acl_rules_db;
 
-    control_server_thread_args->controller_port = ppr_app_cfg->app_settings.controller_port;
+    control_server_thread_args->controller_port = wpr_app_cfg->app_settings.controller_port;
 
     //launch stats thread and pin to core 0
-    if (pthread_create(&control_server_thread, NULL, run_ppr_app_server_thread, control_server_thread_args) != 0){
+    if (pthread_create(&control_server_thread, NULL, run_wpr_app_server_thread, control_server_thread_args) != 0){
         rte_exit(EXIT_FAILURE, "control server thread creation failed\n");
     }
     if (pthread_setaffinity_np(control_server_thread, sizeof(cpu_set_t), &cpuset) != 0){
         rte_exit(EXIT_FAILURE, "pthread_setaffinity_np failed for control server thread\n");
     }
 
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "\t Control Server thread launched on core %d\n", main_lcore_id);
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "\t Control Server thread launched on core %d\n", main_lcore_id);
 
     
     /* ------------------------------------------------------ Wait for all threads to initialize ------------------------------------------------------- */
@@ -757,7 +757,7 @@ int main(int argc, char **argv) {
 
     //poll for all threads to be ready
     bool is_app_ready = false;
-    while (is_app_ready == false && !force_quit && ppr_fatal_error == false) {
+    while (is_app_ready == false && !force_quit && wpr_fatal_error == false) {
         bool all_worker_ready = true;
 
         //tx threads
@@ -797,20 +797,20 @@ int main(int argc, char **argv) {
 
     //bring up all configured external links 
     for (unsigned int i=0; i < global_port_list->num_ports; i++){
-        ppr_port_entry_t *port_entry = &global_port_list->ports[i];
+        wpr_port_entry_t *port_entry = &global_port_list->ports[i];
         
         //if the port is external, bring it up now 
         if(port_entry->is_external == true ){
-            ppr_rc = ppr_port_set_link_state(port_entry, true);
-            if (ppr_rc != 0){
-                PPR_LOG(PPR_LOG_INIT, RTE_LOG_WARNING, "Failed to bring up link for port %s\n",port_entry->name);
+            wpr_rc = wpr_port_set_link_state(port_entry, true);
+            if (wpr_rc != 0){
+                WPR_LOG(WPR_LOG_INIT, RTE_LOG_WARNING, "Failed to bring up link for port %s\n",port_entry->name);
             } else {
-                PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Brought up link for port %s\n",port_entry->name);
+                WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Brought up link for port %s\n",port_entry->name);
             }
         }
     }
 
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
         "\n############################### All threads initialized, starting processing ###############################\n\n");
 
     //wait and clean up
@@ -820,18 +820,18 @@ int main(int argc, char **argv) {
     rte_eal_mp_wait_lcore();
 
     uint16_t shutdown_port_id;
-    PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, 
-        "\n############################### PPR Application Exiting ###############################\n");
+    WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, 
+        "\n############################### WPR Application Exiting ###############################\n");
 
     
     
     RTE_ETH_FOREACH_DEV(shutdown_port_id) {
-        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Stopping port %u\n", shutdown_port_id);
+        WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Stopping port %u\n", shutdown_port_id);
         rte_eth_dev_stop(shutdown_port_id);
     }
 
     RTE_ETH_FOREACH_DEV(shutdown_port_id) {
-        PPR_LOG(PPR_LOG_INIT, RTE_LOG_INFO, "Closing port %u\n", shutdown_port_id);
+        WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Closing port %u\n", shutdown_port_id);
         rte_eth_dev_close(shutdown_port_id);
     }
     
@@ -849,9 +849,9 @@ int main(int argc, char **argv) {
     rte_free(port_stream_global_cfg);
     rte_free(global_pcap_storage);
     rte_free(pcap_loader_ctl);
-    ppr_acl_runtime_deinit(&ppr_acl_runtime_ctx);
+    wpr_acl_runtime_deinit(&wpr_acl_runtime_ctx);
     rte_free(global_policy_epochs);
-    ppr_port_list_free(global_port_list);
+    wpr_port_list_free(global_port_list);
     
     rte_mempool_free(pcap_mempool);
     for (unsigned int i=0; i < tx_cores; i++){
@@ -865,7 +865,7 @@ int main(int argc, char **argv) {
     }
 
     //cyaml 
-    cyaml_free(&cyaml_cfg, &ppr_config_schema, (cyaml_data_t *)ppr_app_cfg, 0);
+    cyaml_free(&cyaml_cfg, &wpr_config_schema, (cyaml_data_t *)wpr_app_cfg, 0);
 
     //eal cleanup 
     rte_eal_cleanup();

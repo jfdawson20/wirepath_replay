@@ -4,7 +4,7 @@ Copyright (c) 2025 jfdawson20
 
 Filename: tx_worker.c 
 Description: Primary entry point and supporting code for DPDK transmit core threads. Transmit cores are responsible for 
-taking pcap data provided by buffer fill threads and transmitting them out the approperate network port. Multiple Tx cores can 
+taking pcap data provided by buffer fill threads and transmitting them out the awproperate network port. Multiple Tx cores can 
 drive traffic out the same network port (each tx core has a separate tx queue to each configured network port), however order 
 across different tx cores is not maintained. To maintain per flow order, tx workers read data provided by their linked buffer threads using a 
 per tx core + port global sequence ID. 
@@ -39,15 +39,15 @@ double buffer arrays for valid data to transmit.
 #include <limits.h>
 #include <rte_ring.h>
 
-#include "ppr_control.h"
-#include "ppr_app_defines.h"
-#include "ppr_ports.h"
-#include "ppr_stats.h"
-#include "ppr_tx_worker.h"
-#include "ppr_buff_worker.h"
-#include "ppr_mbuf_fields.h"
-#include "ppr_time.h"
-#include "ppr_header_extract.h"
+#include "wpr_control.h"
+#include "wpr_app_defines.h"
+#include "wpr_ports.h"
+#include "wpr_stats.h"
+#include "wpr_tx_worker.h"
+#include "wpr_buff_worker.h"
+#include "wpr_mbuf_fields.h"
+#include "wpr_time.h"
+#include "wpr_header_extract.h"
 
 
 #include <stdbool.h>
@@ -61,10 +61,10 @@ double buffer arrays for valid data to transmit.
 #include <rte_udp.h>
 #include <rte_mbuf.h>
 
-#include "ppr_mbuf_fields.h"
-#include "ppr_actions.h"
-#include "ppr_tx_worker.h"      // for ppr_vc_ctx_t
-#include "ppr_header_extract.h" // for ppr_parse_headers + ppr_hdrs_t
+#include "wpr_mbuf_fields.h"
+#include "wpr_actions.h"
+#include "wpr_tx_worker.h"      // for wpr_vc_ctx_t
+#include "wpr_header_extract.h" // for wpr_parse_headers + wpr_hdrs_t
 
 /* ---------------- checksum helpers (recompute) ---------------- */
 
@@ -125,26 +125,26 @@ static inline void clear_rss_hash(struct rte_mbuf *m)
 }
 
 /* Return true if caller should drop/free */
-static bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
+static bool wpr_modify_mbuf(struct rte_mbuf *m, const wpr_vc_ctx_t *vc)
 {
     if (unlikely(m == NULL || vc == NULL)){
-        PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "ppr_modify_mbuf: invalid null pointer\n");
+        WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "wpr_modify_mbuf: invalid null pointer\n");
         return true;
     }
 
-    ppr_priv_t *priv = ppr_priv(m);
+    wpr_priv_t *priv = wpr_priv(m);
 
     /* If action isn't valid, do nothing */
     if (!priv->pending_policy_action.valid)
         return false;
 
     /* Parse packet headers (offsets, L3/L4, etc.) */
-    ppr_hdrs_t hdrs;
-    int rc = ppr_parse_headers(m, &hdrs);
+    wpr_hdrs_t hdrs;
+    int rc = wpr_parse_headers(m, &hdrs);
     if (rc < 0)
         return false; /* can't safely edit -> treat as NOOP */
 
-    ppr_flow_action_kind_t act = priv->pending_policy_action.default_policy;
+    wpr_flow_action_kind_t act = priv->pending_policy_action.default_policy;
 
     if (act == FLOW_ACT_NOOP)
         return false;
@@ -171,7 +171,7 @@ static bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
     }
 
     /* ---------- L3/L4 (IPv4 only in this version) ---------- */
-    if (hdrs.l3_type == PPR_L3_IPV4) {
+    if (hdrs.l3_type == WPR_L3_IPV4) {
         struct rte_ipv4_hdr *ip4 = rte_pktmbuf_mtod_offset(m, struct rte_ipv4_hdr *, hdrs.outer_l3_ofs);
 
         if (act == FLOW_ACT_MODIFY_SRCIP || act == FLOW_ACT_MODIFY_SRC_ALL || act == FLOW_ACT_MODIFY_ALL) {
@@ -184,7 +184,7 @@ static bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
         }
 
         /* L4 ports only if TCP/UDP */
-        if (hdrs.l4_type == PPR_L4_TCP) {
+        if (hdrs.l4_type == WPR_L4_TCP) {
             struct rte_tcp_hdr *tcp = rte_pktmbuf_mtod_offset(m, struct rte_tcp_hdr *, hdrs.outer_l4_ofs);
 
             if (act == FLOW_ACT_MODIFY_SRCPORT || act == FLOW_ACT_MODIFY_SRC_ALL || act == FLOW_ACT_MODIFY_ALL) {
@@ -208,7 +208,7 @@ static bool ppr_modify_mbuf(struct rte_mbuf *m, const ppr_vc_ctx_t *vc)
                 tcp->cksum = l4_checksum_ipv4(ip4, tcp, l4_len, IPPROTO_TCP);
             }
 
-        } else if (hdrs.l4_type == PPR_L4_UDP) {
+        } else if (hdrs.l4_type == WPR_L4_UDP) {
             struct rte_udp_hdr *udp = rte_pktmbuf_mtod_offset(m, struct rte_udp_hdr *, hdrs.outer_l4_ofs);
 
             if (act == FLOW_ACT_MODIFY_SRCPORT || act == FLOW_ACT_MODIFY_SRC_ALL || act == FLOW_ACT_MODIFY_ALL) {
@@ -283,8 +283,8 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
                uint32_t slot_id, 
                int mbuf_ts_off,
                struct rte_mempool *tx_pool,
-               ppr_port_stream_ctx_t *psc,
-               ppr_vc_ctx_t *vc,
+               wpr_port_stream_ctx_t *psc,
+               wpr_vc_ctx_t *vc,
                uint64_t phase) 
 {
     uint16_t nb = 0;
@@ -318,14 +318,14 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
         }
 
         // create a packet copy since we may need to modify it 
-        struct rte_mbuf *c = ppr_copy_with_priv(tmpl, tx_pool);
+        struct rte_mbuf *c = wpr_copy_with_priv(tmpl, tx_pool);
         if (unlikely(c == NULL)) {
             printf("failed to copy\n");
             break; // pool pressure: just send the ones we cloned
         }
 
         //apply any packet modifications
-        if (unlikely(ppr_modify_mbuf(c, vc))) {
+        if (unlikely(wpr_modify_mbuf(c, vc))) {
             rte_pktmbuf_free(c);
             continue;
         }
@@ -341,9 +341,9 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
 int run_tx_worker(__rte_unused void *arg) { 
 
     //parse tx args struct for future use 
-    ppr_thread_args_t               *thread_args = (ppr_thread_args_t *)arg;
-    ppr_ports_t                     *global_port_list = thread_args->global_port_list;
-    ppr_tx_worker_ctx_t             *tx_worker_ctx = thread_args->tx_worker_ctx; 
+    wpr_thread_args_t               *thread_args = (wpr_thread_args_t *)arg;
+    wpr_ports_t                     *global_port_list = thread_args->global_port_list;
+    wpr_tx_worker_ctx_t             *tx_worker_ctx = thread_args->tx_worker_ctx; 
     struct rte_mempool              *tx_pool = thread_args->txcore_copy_mpools;
     uint16_t                         mbuf_ts_off = thread_args->mbuf_ts_off; 
     //int                             rc = 0;     
@@ -363,7 +363,7 @@ int run_tx_worker(__rte_unused void *arg) {
     }
 
     int cpu = sched_getcpu();
-    PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "dp_worker_main started: lcore=%u linux_cpu=%d index=%u\n", rte_lcore_id(), cpu, thread_args->thread_index);
+    WPR_LOG(WPR_LOG_DP, RTE_LOG_INFO, "dp_worker_main started: lcore=%u linux_cpu=%d index=%u\n", rte_lcore_id(), cpu, thread_args->thread_index);
 
     /* Main tx thread loop */
     while(!force_quit){
@@ -371,13 +371,13 @@ int run_tx_worker(__rte_unused void *arg) {
         //get current timestamp counter, this is the current time in ns since some arbitrary point in the past
         //when we first start transmitting a pcap on a port, we capture this value as the "start time" for that pcap stream
         //all future packet timestamps for that stream are relative to this start time
-        uint64_t now_ns = ppr_now_ns();
+        uint64_t now_ns = wpr_now_ns();
 
         /* ------------------------------------- Iterate over all ports in the global port list -----------------------*/
         for (uint16_t port_idx =0; port_idx < num_ports; port_idx++){
             
             /* ---------------------------------- Get port entry and validate its present and configured to transmit ----------------------*/
-            ppr_port_entry_t *port_entry = &global_port_list->ports[port_idx];
+            wpr_port_entry_t *port_entry = &global_port_list->ports[port_idx];
             //skip ports that are not tx enabled 
             if (atomic_load_explicit(&port_entry->tx_enabled, memory_order_acquire) == false){
                 continue;
@@ -387,18 +387,18 @@ int run_tx_worker(__rte_unused void *arg) {
             uint16_t dpdk_port_id = port_entry->port_id;
             uint16_t tx_queue_id  = tx_worker_ctx->queue_id_by_port[port_idx];
             
-            ppr_port_stream_ctx_t *port_stream_ctx = &tx_worker_ctx->port_stream[port_idx];
-            ppr_port_stream_global_t *g = port_stream_ctx->global_cfg;
+            wpr_port_stream_ctx_t *port_stream_ctx = &tx_worker_ctx->port_stream[port_idx];
+            wpr_port_stream_global_t *g = port_stream_ctx->global_cfg;
 
             if(!port_stream_ctx || !g){
-                PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Invalid port stream context for port index %u\n", port_idx);
+                WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Invalid port stream context for port index %u\n", port_idx);
                 continue;
             }
 
             //load slot id for this port stream
             uint32_t slot_id = atomic_load_explicit(&g->slot_id, memory_order_acquire);
             if (slot_id == UINT32_MAX) {
-                PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG, "No pcap slot assigned for port index %u\n", port_idx);
+                WPR_LOG(WPR_LOG_DP, RTE_LOG_DEBUG, "No pcap slot assigned for port index %u\n", port_idx);
                 continue;
             }
 
@@ -410,7 +410,7 @@ int run_tx_worker(__rte_unused void *arg) {
             if (g->pace_mode == VC_PACE_PCAP_TS) {
                 uint64_t w = g->replay_window_ns;
                 if (unlikely(w == 0)) {
-                    PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Replay window ns is 0 for port index %u\n", port_idx);
+                    WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Replay window ns is 0 for port index %u\n", port_idx);
                     continue;
                 }
                 
@@ -429,7 +429,7 @@ int run_tx_worker(__rte_unused void *arg) {
             }
 
             /* Workers serving this port + my rank among them */
-            ppr_port_worker_map_t map = tx_worker_ctx->map_by_port[port_idx];
+            wpr_port_worker_map_t map = tx_worker_ctx->map_by_port[port_idx];
             uint16_t W = map.W;
             uint16_t rank = map.rank;
 
@@ -440,7 +440,7 @@ int run_tx_worker(__rte_unused void *arg) {
 
             /* Compute my slice */
             uint32_t start_gid = 0, count = 0;
-            ppr_vc_slice(N, W, rank, &start_gid, &count);
+            wpr_vc_slice(N, W, rank, &start_gid, &count);
 
             if (count > MAX_VC_PER_WORKER) {
                 /* either clamp or treat as config error */
@@ -452,7 +452,7 @@ int run_tx_worker(__rte_unused void *arg) {
 
                 for (uint32_t i = 0; i < count; i++) {
                     uint32_t gid = start_gid + i;
-                    ppr_vc_ctx_t *vc = &port_stream_ctx->clients[i];
+                    wpr_vc_ctx_t *vc = &port_stream_ctx->clients[i];
 
                     if (vc->global_client_id != gid) {
                         vc_materialize_identity(vc, &g->idp, port_idx, gid);
@@ -461,7 +461,7 @@ int run_tx_worker(__rte_unused void *arg) {
                         vc->epoch = 0;
                         vc->flow_epoch = 0;
 
-                        /* You MUST also ensure start_idx/start_offset/base_rel_ns are set appropriately.
+                        /* You MUST also ensure start_idx/start_offset/base_rel_ns are set awpropriately.
                         If you already have per-VC init logic, call it here.
                         Minimal safe defaults:
                         */
@@ -488,7 +488,7 @@ int run_tx_worker(__rte_unused void *arg) {
 
             for (uint32_t k = 0; k < budget_clients && k < nclients; k++) {
                 uint32_t vc_idx = (start + k) % nclients;
-                ppr_vc_ctx_t *vc = &port_stream_ctx->clients[vc_idx];
+                wpr_vc_ctx_t *vc = &port_stream_ctx->clients[vc_idx];
 
                 if (vc->epoch != epoch && g->pace_mode == VC_PACE_PCAP_TS) {
                     vc->epoch = epoch;

@@ -4,11 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "ppr_acl.h"
-#include "ppr_acl_rpc.h"
-#include "ppr_helpers.h"
-#include "ppr_ports.h"
-#include "ppr_app_defines.h"
+#include "wpr_acl.h"
+#include "wpr_acl_rpc.h"
+#include "wpr_helpers.h"
+#include "wpr_ports.h"
+#include "wpr_app_defines.h"
 
 /* --------------------------- Static / Internal JSON <> Structs Helpers ----------------------------- */
 /** 
@@ -72,7 +72,7 @@ static void format_mac(const struct rte_ether_addr *mac, char *buf, size_t buf_l
 }
 
 //parse a list of port names comma separated, return global index range
-static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, uint16_t *lo_out, uint16_t *hi_out)
+static int parse_input_port_list(const char *s ,wpr_ports_t *global_port_list, uint16_t *lo_out, uint16_t *hi_out)
 {
     /* Missing or empty -> wildcard [0,65535] */
     if (!s || !*s ||
@@ -92,14 +92,14 @@ static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, u
         if (sscanf(s, "%63[^:]:%63s", lo, hi) != 2)
             return -EINVAL;
 
-        ppr_port_entry_t *port_lo = ppr_find_port_byname(global_port_list, lo);
-        ppr_port_entry_t *port_hi = ppr_find_port_byname(global_port_list, hi);
+        wpr_port_entry_t *port_lo = wpr_find_port_byname(global_port_list, lo);
+        wpr_port_entry_t *port_hi = wpr_find_port_byname(global_port_list, hi);
         if (!port_lo || !port_hi){
             return -EINVAL;
         }
         *lo_out = port_lo->port_id;
         *hi_out = port_hi->port_id;
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO, "Parsed port list '%s' to range [%u,%u]\n", s, *lo_out, *hi_out);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO, "Parsed port list '%s' to range [%u,%u]\n", s, *lo_out, *hi_out);
         return 0;
     }
 
@@ -108,14 +108,14 @@ static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, u
         if (sscanf(s, "%63[^-]-%63s", lo, hi) != 2)
             return -EINVAL;
 
-        ppr_port_entry_t *port_lo = ppr_find_port_byname(global_port_list, lo);
-        ppr_port_entry_t *port_hi = ppr_find_port_byname(global_port_list, hi);
+        wpr_port_entry_t *port_lo = wpr_find_port_byname(global_port_list, lo);
+        wpr_port_entry_t *port_hi = wpr_find_port_byname(global_port_list, hi);
         if (!port_lo || !port_hi){
             return -EINVAL;
         }
         *lo_out = port_lo->port_id;
         *hi_out = port_hi->port_id;
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO, "Parsed port list '%s' to range [%u,%u]\n", s, *lo_out, *hi_out);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO, "Parsed port list '%s' to range [%u,%u]\n", s, *lo_out, *hi_out);
         return 0;      
     }
 
@@ -123,13 +123,13 @@ static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, u
     if (sscanf(s, "%63s", lo) != 1)
         return -EINVAL;
 
-    ppr_port_entry_t *port_lo = ppr_find_port_byname(global_port_list, lo);
+    wpr_port_entry_t *port_lo = wpr_find_port_byname(global_port_list, lo);
     if (!port_lo){
         return -EINVAL;
     }    
     *lo_out = port_lo->port_id;
     *hi_out = port_lo->port_id;
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO, "Parsed port list '%s' to range [%u,%u]\n", s, *lo_out, *hi_out);
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO, "Parsed port list '%s' to range [%u,%u]\n", s, *lo_out, *hi_out);
     return 0;
 }
 
@@ -236,7 +236,7 @@ static int parse_tenant_range(const char *s, uint32_t *lo_out, uint32_t *hi_out)
 }
 
 
-static json_t *ppr_policy_action_to_json(ppr_ports_t *global_port_list, const ppr_policy_action_t *action)
+static json_t *wpr_policy_action_to_json(wpr_ports_t *global_port_list, const wpr_policy_action_t *action)
 {   
     (void) global_port_list;
 
@@ -249,13 +249,13 @@ static json_t *ppr_policy_action_to_json(ppr_ports_t *global_port_list, const pp
 
     /* we don’t encode hit (runtime only) */
     json_object_set_new(obj, "default_policy",
-                        json_string(ppr_flow_action_kind_to_str(action->default_policy)));
+                        json_string(wpr_flow_action_kind_to_str(action->default_policy)));
 
 
     return obj;
 }
 
-static int ppr_acl_action_from_json(const json_t *obj, ppr_ports_t *global_port_list,ppr_policy_action_t *out)
+static int wpr_acl_action_from_json(const json_t *obj, wpr_ports_t *global_port_list,wpr_policy_action_t *out)
 {
 
     (void) global_port_list;
@@ -268,7 +268,7 @@ static int ppr_acl_action_from_json(const json_t *obj, ppr_ports_t *global_port_
     int64_t v;
     if (json_get_required_int(obj, "default_policy", &v) < 0)
         return -EINVAL;
-    out->default_policy = (ppr_flow_action_kind_t)v;
+    out->default_policy = (wpr_flow_action_kind_t)v;
 
 
 
@@ -280,8 +280,8 @@ static int ppr_acl_action_from_json(const json_t *obj, ppr_ports_t *global_port_
 
 /* ---------- IPv4 rule <-> JSON ---------- */
 
-static json_t *ppr_acl_ip4_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *global_port_list, 
-                                        const ppr_acl_ip4_rule_cfg_t *cfg, unsigned int rule_index)
+static json_t *wpr_acl_ip4_rule_to_json(wpr_acl_runtime_t *acl_rt, wpr_ports_t *global_port_list, 
+                                        const wpr_acl_ip4_rule_cfg_t *cfg, unsigned int rule_index)
 {
     if (!cfg || !acl_rt || !global_port_list)
         return NULL;
@@ -291,9 +291,9 @@ static json_t *ppr_acl_ip4_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
         return NULL;
 
     //get acl rule stats
-    ppr_acl_rule_db_stats_t *acl_stats = atomic_load_explicit(&acl_rt->global_stats_curr, memory_order_acquire); 
+    wpr_acl_rule_db_stats_t *acl_stats = atomic_load_explicit(&acl_rt->global_stats_curr, memory_order_acquire); 
     if (acl_stats){
-        ppr_acl_rule_stats_t rule_stats = acl_stats->ip4[rule_index];
+        wpr_acl_rule_stats_t rule_stats = acl_stats->ip4[rule_index];
         uint64_t total_flows = atomic_load_explicit(&rule_stats.total_flows, memory_order_relaxed);
         uint64_t active_flows = atomic_load_explicit(&rule_stats.active_flows, memory_order_relaxed);
 
@@ -342,8 +342,8 @@ static json_t *ppr_acl_ip4_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
     json_object_set_new(obj, "proto",        json_integer(cfg->proto));
 
     /* ingress port range */
-    ppr_port_entry_t *port_entry_lo = ppr_find_port_byid(global_port_list, cfg->in_port_lo);
-    ppr_port_entry_t *port_entry_hi = ppr_find_port_byid(global_port_list, cfg->in_port_hi);
+    wpr_port_entry_t *port_entry_lo = wpr_find_port_byid(global_port_list, cfg->in_port_lo);
+    wpr_port_entry_t *port_entry_hi = wpr_find_port_byid(global_port_list, cfg->in_port_hi);
     if( port_entry_lo != NULL && port_entry_hi != NULL){
         char in_port_buf[128];
         snprintf(in_port_buf, sizeof(in_port_buf), "%s-%s", port_entry_lo->name, port_entry_hi->name);
@@ -358,7 +358,7 @@ static json_t *ppr_acl_ip4_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
 
 
     /* action */
-    json_t *act = ppr_policy_action_to_json(global_port_list, &cfg->action);
+    json_t *act = wpr_policy_action_to_json(global_port_list, &cfg->action);
     if (!act) {
         json_decref(obj);
         return NULL;
@@ -368,7 +368,7 @@ static json_t *ppr_acl_ip4_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
     return obj;
 }
 
-static int ppr_acl_ip4_rule_from_json(const json_t *obj, ppr_ports_t *global_port_list, ppr_acl_ip4_rule_cfg_t *out)
+static int wpr_acl_ip4_rule_from_json(const json_t *obj, wpr_ports_t *global_port_list, wpr_acl_ip4_rule_cfg_t *out)
 {
     if (!obj || !json_is_object(obj) || !out)
         return -EINVAL;
@@ -500,7 +500,7 @@ static int ppr_acl_ip4_rule_from_json(const json_t *obj, ppr_ports_t *global_por
     json_t *act = json_object_get(obj, "action");
     if (!act || !json_is_object(act))
         return -EINVAL;
-    if (ppr_acl_action_from_json(act, global_port_list, &out->action) < 0)
+    if (wpr_acl_action_from_json(act, global_port_list, &out->action) < 0)
         return -EINVAL;
 
     return 0;
@@ -508,8 +508,8 @@ static int ppr_acl_ip4_rule_from_json(const json_t *obj, ppr_ports_t *global_por
 
 /* ---------- IPv6 rule <-> JSON ---------- */
 
-static json_t *ppr_acl_ip6_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *global_port_list,
-                                        const ppr_acl_ip6_rule_cfg_t *cfg ,unsigned int rule_index)
+static json_t *wpr_acl_ip6_rule_to_json(wpr_acl_runtime_t *acl_rt, wpr_ports_t *global_port_list,
+                                        const wpr_acl_ip6_rule_cfg_t *cfg ,unsigned int rule_index)
 {
     if (!acl_rt || !cfg || !global_port_list )
         return NULL;
@@ -519,9 +519,9 @@ static json_t *ppr_acl_ip6_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
         return NULL;
 
     //get acl rule stats
-    ppr_acl_rule_db_stats_t *acl_stats = atomic_load_explicit(&acl_rt->global_stats_curr, memory_order_acquire); 
+    wpr_acl_rule_db_stats_t *acl_stats = atomic_load_explicit(&acl_rt->global_stats_curr, memory_order_acquire); 
     if (acl_stats){
-        ppr_acl_rule_stats_t rule_stats = acl_stats->ip6[rule_index];
+        wpr_acl_rule_stats_t rule_stats = acl_stats->ip6[rule_index];
         uint64_t total_flows = atomic_load_explicit(&rule_stats.total_flows, memory_order_relaxed);
         uint64_t active_flows = atomic_load_explicit(&rule_stats.active_flows, memory_order_relaxed);
 
@@ -567,8 +567,8 @@ static json_t *ppr_acl_ip6_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
     json_object_set_new(obj, "proto",        json_integer(cfg->proto));
 
     /* ingress port range */
-    ppr_port_entry_t *port_entry_lo = ppr_find_port_byid(global_port_list, cfg->in_port_lo);
-    ppr_port_entry_t *port_entry_hi = ppr_find_port_byid(global_port_list, cfg->in_port_hi);
+    wpr_port_entry_t *port_entry_lo = wpr_find_port_byid(global_port_list, cfg->in_port_lo);
+    wpr_port_entry_t *port_entry_hi = wpr_find_port_byid(global_port_list, cfg->in_port_hi);
     if( port_entry_lo != NULL && port_entry_hi != NULL){
         char in_port_buf[128];
         snprintf(in_port_buf, sizeof(in_port_buf), "%s-%s", port_entry_lo->name, port_entry_hi->name);
@@ -581,7 +581,7 @@ static json_t *ppr_acl_ip6_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
     json_object_set_new(obj, "priority", json_integer(cfg->priority));
     json_object_set_new(obj, "rule_id",  json_integer(cfg->rule_id));
 
-    json_t *act = ppr_policy_action_to_json(global_port_list, &cfg->action);
+    json_t *act = wpr_policy_action_to_json(global_port_list, &cfg->action);
     if (!act) {
         json_decref(obj);
         return NULL;
@@ -591,7 +591,7 @@ static json_t *ppr_acl_ip6_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *
     return obj;
 }
 
-static int ppr_acl_ip6_rule_from_json(const json_t *obj, ppr_ports_t *global_port_list, ppr_acl_ip6_rule_cfg_t *out)
+static int wpr_acl_ip6_rule_from_json(const json_t *obj, wpr_ports_t *global_port_list, wpr_acl_ip6_rule_cfg_t *out)
 {
     if (!obj || !json_is_object(obj) || !out)
         return -EINVAL;
@@ -720,7 +720,7 @@ static int ppr_acl_ip6_rule_from_json(const json_t *obj, ppr_ports_t *global_por
     json_t *act = json_object_get(obj, "action");
     if (!act || !json_is_object(act))
         return -EINVAL;
-    if (ppr_acl_action_from_json(act, global_port_list, &out->action) < 0)
+    if (wpr_acl_action_from_json(act, global_port_list, &out->action) < 0)
         return -EINVAL;
 
     return 0;
@@ -728,8 +728,8 @@ static int ppr_acl_ip6_rule_from_json(const json_t *obj, ppr_ports_t *global_por
 
 /* ---------- L2 rule <-> JSON ---------- */
 
-static json_t *ppr_acl_l2_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *global_port_list, 
-                                       const ppr_acl_l2_rule_cfg_t *cfg, unsigned int rule_index)
+static json_t *wpr_acl_l2_rule_to_json(wpr_acl_runtime_t *acl_rt, wpr_ports_t *global_port_list, 
+                                       const wpr_acl_l2_rule_cfg_t *cfg, unsigned int rule_index)
 {
     if (!acl_rt || !cfg || !global_port_list )
         return NULL;
@@ -740,9 +740,9 @@ static json_t *ppr_acl_l2_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *g
 
     //get acl rule stats
     //get acl rule stats
-    ppr_acl_rule_db_stats_t *acl_stats = atomic_load_explicit(&acl_rt->global_stats_curr, memory_order_acquire); 
+    wpr_acl_rule_db_stats_t *acl_stats = atomic_load_explicit(&acl_rt->global_stats_curr, memory_order_acquire); 
     if (acl_stats){
-        ppr_acl_rule_stats_t rule_stats = acl_stats->l2[rule_index];
+        wpr_acl_rule_stats_t rule_stats = acl_stats->l2[rule_index];
         uint64_t total_flows = atomic_load_explicit(&rule_stats.total_flows, memory_order_relaxed);
         uint64_t active_flows = atomic_load_explicit(&rule_stats.active_flows, memory_order_relaxed);
 
@@ -759,8 +759,8 @@ static json_t *ppr_acl_l2_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *g
     json_object_set_new(obj, "tenant_ids", json_string(tenant_id_buf));
 
     /* ingress port range */
-    ppr_port_entry_t *port_entry_lo = ppr_find_port_byid(global_port_list, cfg->in_port_lo);
-    ppr_port_entry_t *port_entry_hi = ppr_find_port_byid(global_port_list, cfg->in_port_hi);
+    wpr_port_entry_t *port_entry_lo = wpr_find_port_byid(global_port_list, cfg->in_port_lo);
+    wpr_port_entry_t *port_entry_hi = wpr_find_port_byid(global_port_list, cfg->in_port_hi);
     if( port_entry_lo != NULL && port_entry_hi != NULL){
         char in_port_buf[128];
         snprintf(in_port_buf, sizeof(in_port_buf), "%s-%s", port_entry_lo->name, port_entry_hi->name);
@@ -790,7 +790,7 @@ static json_t *ppr_acl_l2_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *g
     format_mac(&cfg->dst_mac, macbuf, sizeof(macbuf));
     json_object_set_new(obj, "dst_mac", json_string(macbuf));
 
-    json_t *act = ppr_policy_action_to_json(global_port_list, &cfg->action);
+    json_t *act = wpr_policy_action_to_json(global_port_list, &cfg->action);
     if (!act) {
         json_decref(obj);
         return NULL;
@@ -800,7 +800,7 @@ static json_t *ppr_acl_l2_rule_to_json(ppr_acl_runtime_t *acl_rt, ppr_ports_t *g
     return obj;
 }
 
-static int ppr_acl_l2_rule_from_json(const json_t *obj, ppr_ports_t *global_port_list, ppr_acl_l2_rule_cfg_t *out)
+static int wpr_acl_l2_rule_from_json(const json_t *obj, wpr_ports_t *global_port_list, wpr_acl_l2_rule_cfg_t *out)
 {
     if (!obj || !json_is_object(obj) || !out)
         return -EINVAL;
@@ -920,7 +920,7 @@ static int ppr_acl_l2_rule_from_json(const json_t *obj, ppr_ports_t *global_port
     json_t *act = json_object_get(obj, "action");
     if (!act || !json_is_object(act))
         return -EINVAL;
-    if (ppr_acl_action_from_json(act, global_port_list, &out->action) < 0)
+    if (wpr_acl_action_from_json(act, global_port_list, &out->action) < 0)
         return -EINVAL;
 
     return 0;
@@ -939,14 +939,14 @@ static int ppr_acl_l2_rule_from_json(const json_t *obj, ppr_ports_t *global_port
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_cmd_get_acl_db(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_get_acl_db(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     (void) args;
 
     //get ACL DB and runtime pointers
-    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
-    ppr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
+    wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    wpr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
 
-    ppr_ports_t *global_port_list = thread_args->global_port_list;
+    wpr_ports_t *global_port_list = thread_args->global_port_list;
 
     //guard on null 
     if(!acl_db || !acl_rt){
@@ -959,15 +959,15 @@ int ppr_cmd_get_acl_db(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
         return -ENOMEM;
     }
 
-    for (unsigned int i=0; i < PPR_ACL_MAX_RULES; i++){
-        ppr_acl_ip4_rule_cfg_t *rule_cfg = &acl_db->ip4.rules[i];
+    for (unsigned int i=0; i < WPR_ACL_MAX_RULES; i++){
+        wpr_acl_ip4_rule_cfg_t *rule_cfg = &acl_db->ip4.rules[i];
         
         //if rule slot not in use, skip
         if(!rule_cfg || !acl_db->ip4.used[i]){
             continue;
         }
 
-        json_t *rule_json = ppr_acl_ip4_rule_to_json(acl_rt, global_port_list, rule_cfg,i);
+        json_t *rule_json = wpr_acl_ip4_rule_to_json(acl_rt, global_port_list, rule_cfg,i);
         if(!rule_json){
             json_decref(ipv4_rules);
             return -ENOMEM;
@@ -981,15 +981,15 @@ int ppr_cmd_get_acl_db(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
     if(!ipv6_rules){
         return -ENOMEM;
     }
-    for (unsigned int i=0; i < PPR_ACL_MAX_RULES; i++){
-        ppr_acl_ip6_rule_cfg_t *rule_cfg = &acl_db->ip6.rules[i];
+    for (unsigned int i=0; i < WPR_ACL_MAX_RULES; i++){
+        wpr_acl_ip6_rule_cfg_t *rule_cfg = &acl_db->ip6.rules[i];
         
         //if rule slot not in use, skip
         if(!rule_cfg || !acl_db->ip6.used[i]){
             continue;
         }
 
-        json_t *rule_json = ppr_acl_ip6_rule_to_json(acl_rt, global_port_list, rule_cfg,i);
+        json_t *rule_json = wpr_acl_ip6_rule_to_json(acl_rt, global_port_list, rule_cfg,i);
         if(!rule_json){
             json_decref(ipv6_rules);
             return -ENOMEM;
@@ -1003,15 +1003,15 @@ int ppr_cmd_get_acl_db(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
     if(!l2_rules){
         return -ENOMEM;
     }   
-    for (unsigned int i=0; i < PPR_ACL_MAX_RULES; i++){
-        ppr_acl_l2_rule_cfg_t *rule_cfg = &acl_db->l2.rules[i];
+    for (unsigned int i=0; i < WPR_ACL_MAX_RULES; i++){
+        wpr_acl_l2_rule_cfg_t *rule_cfg = &acl_db->l2.rules[i];
         
         //if rule slot not in use, skip
         if(!rule_cfg || !acl_db->l2.used[i]){
             continue;
         }
 
-        json_t *rule_json = ppr_acl_l2_rule_to_json(acl_rt, global_port_list, rule_cfg ,i );
+        json_t *rule_json = wpr_acl_l2_rule_to_json(acl_rt, global_port_list, rule_cfg ,i );
         if(!rule_json){
             json_decref(l2_rules);
             return -ENOMEM;
@@ -1034,11 +1034,11 @@ int ppr_cmd_get_acl_db(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_cmd_add_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_add_acl_rule(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     //get ACL DB and runtime pointers
-    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
-    ppr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
-    ppr_ports_t *global_port_list = thread_args->global_port_list;
+    wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    wpr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
+    wpr_ports_t *global_port_list = thread_args->global_port_list;
 
     //guard on null 
     if(!acl_db || !acl_rt || !args){
@@ -1069,39 +1069,39 @@ int ppr_cmd_add_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t *th
 
     if(strcmp(rule_type, "ipv4") == 0){
         //parse IPv4 rule from JSON
-        ppr_acl_ip4_rule_cfg_t rule_cfg;
-        if(ppr_acl_ip4_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
+        wpr_acl_ip4_rule_cfg_t rule_cfg;
+        if(wpr_acl_ip4_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
             return -EINVAL;
         }
 
         //add rule to ACL DB
-        ret = ppr_acl_db_add_ip4_rule(acl_db, &rule_cfg, &assigned_rule_id);
+        ret = wpr_acl_db_add_ip4_rule(acl_db, &rule_cfg, &assigned_rule_id);
         if(ret < 0){
             return ret;
         }
 
     } else if(strcmp(rule_type, "ipv6") == 0){
         //parse IPv6 rule from JSON
-        ppr_acl_ip6_rule_cfg_t rule_cfg;
-        if(ppr_acl_ip6_rule_from_json(rule_cfg_json,global_port_list, &rule_cfg) < 0){
+        wpr_acl_ip6_rule_cfg_t rule_cfg;
+        if(wpr_acl_ip6_rule_from_json(rule_cfg_json,global_port_list, &rule_cfg) < 0){
             return -EINVAL;
         }
 
         //add rule to ACL DB
-        ret = ppr_acl_db_add_ip6_rule(acl_db, &rule_cfg, &assigned_rule_id);
+        ret = wpr_acl_db_add_ip6_rule(acl_db, &rule_cfg, &assigned_rule_id);
         if(ret < 0){
             return ret;
         }
 
     } else if(strcmp(rule_type, "l2") == 0){
         //parse L2 rule from JSON
-        ppr_acl_l2_rule_cfg_t rule_cfg;
-        if(ppr_acl_l2_rule_from_json(rule_cfg_json,global_port_list, &rule_cfg) < 0){
+        wpr_acl_l2_rule_cfg_t rule_cfg;
+        if(wpr_acl_l2_rule_from_json(rule_cfg_json,global_port_list, &rule_cfg) < 0){
             return -EINVAL;
         }
 
         //add rule to ACL DB
-        ret = ppr_acl_db_add_l2_rule(acl_db, &rule_cfg, &assigned_rule_id);
+        ret = wpr_acl_db_add_l2_rule(acl_db, &rule_cfg, &assigned_rule_id);
         if(ret < 0){
             return ret;
         }
@@ -1126,13 +1126,13 @@ int ppr_cmd_add_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t *th
 * @return
 *   0 on success, negative errno on failure.    
 **/
-int ppr_cmd_update_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_update_acl_rule(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     (void) reply_root;
     
     //get ACL DB and runtime pointers
-    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
-    ppr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
-    ppr_ports_t *global_port_list = thread_args->global_port_list;
+    wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    wpr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
+    wpr_ports_t *global_port_list = thread_args->global_port_list;
 
     //guard on null 
     if(!acl_db || !acl_rt || !args){
@@ -1159,46 +1159,46 @@ int ppr_cmd_update_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t 
 
     if (strcmp(rule_type, "ipv4") == 0){
         //parse IPv4 rule from JSON
-        ppr_acl_ip4_rule_cfg_t rule_cfg;
-        if(ppr_acl_ip4_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
+        wpr_acl_ip4_rule_cfg_t rule_cfg;
+        if(wpr_acl_ip4_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
             return -EINVAL;
         }
 
         //update rule in ACL DB
-        return ppr_acl_db_update_ip4_rule(acl_db, rule_id, &rule_cfg);
+        return wpr_acl_db_update_ip4_rule(acl_db, rule_id, &rule_cfg);
 
     } else if(strcmp(rule_type, "ipv6") == 0){
         //parse IPv6 rule from JSON
-        ppr_acl_ip6_rule_cfg_t rule_cfg;
-        if(ppr_acl_ip6_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
+        wpr_acl_ip6_rule_cfg_t rule_cfg;
+        if(wpr_acl_ip6_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
             return -EINVAL;
         }
 
         //update rule in ACL DB
-        return ppr_acl_db_update_ip6_rule(acl_db, rule_id, &rule_cfg);
+        return wpr_acl_db_update_ip6_rule(acl_db, rule_id, &rule_cfg);
 
     } else if(strcmp(rule_type, "l2") == 0){
         //parse L2 rule from JSON
-        ppr_acl_l2_rule_cfg_t rule_cfg;
-        if(ppr_acl_l2_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
+        wpr_acl_l2_rule_cfg_t rule_cfg;
+        if(wpr_acl_l2_rule_from_json(rule_cfg_json, global_port_list, &rule_cfg) < 0){
             return -EINVAL;
         }
 
         //update rule in ACL DB
-        return ppr_acl_db_update_l2_rule(acl_db, rule_id, &rule_cfg);
+        return wpr_acl_db_update_l2_rule(acl_db, rule_id, &rule_cfg);
 
     } else {
         return -EINVAL; //unknown rule type
     }
 }
 
-int ppr_cmd_delete_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_delete_acl_rule(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     
     (void) reply_root;
 
     //get ACL DB and runtime pointers
-    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
-    ppr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
+    wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    wpr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
     
     
     //guard on null 
@@ -1220,15 +1220,15 @@ int ppr_cmd_delete_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t 
 
     if (strcmp(rule_type, "ipv4") == 0){
         //delete rule from ACL DB
-        return ppr_acl_db_del_ip4_rule(acl_db, rule_id);
+        return wpr_acl_db_del_ip4_rule(acl_db, rule_id);
 
     } else if(strcmp(rule_type, "ipv6") == 0){
         //delete rule from ACL DB
-        return ppr_acl_db_del_ip6_rule(acl_db, rule_id);
+        return wpr_acl_db_del_ip6_rule(acl_db, rule_id);
 
     } else if(strcmp(rule_type, "l2") == 0){
         //delete rule from ACL DB
-        return ppr_acl_db_del_l2_rule(acl_db, rule_id);
+        return wpr_acl_db_del_l2_rule(acl_db, rule_id);
 
     } else {
         return -EINVAL; //unknown rule type
@@ -1246,11 +1246,11 @@ int ppr_cmd_delete_acl_rule(json_t *reply_root, json_t *args, ppr_thread_args_t 
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_cmd_check_acl_status(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_check_acl_status(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     (void) args;
 
     //get ACL DB pointer
-    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
 
     //guard on null 
     if(!acl_db){
@@ -1277,13 +1277,13 @@ int ppr_cmd_check_acl_status(json_t *reply_root, json_t *args, ppr_thread_args_t
 *   Pointer to JSON object to populate with reply data.
 * @param args   
 **/
-int ppr_cmd_acl_db_commit(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_acl_db_commit(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     (void) reply_root;
     (void) args;
 
     //get ACL DB and runtime pointers
-    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
-    ppr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
+    wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    wpr_acl_runtime_t *acl_rt = thread_args->acl_runtime;
 
     //guard on null 
     if(!acl_db || !acl_rt){
@@ -1291,5 +1291,5 @@ int ppr_cmd_acl_db_commit(json_t *reply_root, json_t *args, ppr_thread_args_t *t
     }
 
     //commit changes from CP to ACL runtime
-    return ppr_acl_db_commit(acl_rt, acl_db);
+    return wpr_acl_db_commit(acl_rt, acl_db);
 }

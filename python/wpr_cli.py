@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-control_client.py - Python client for the PPR control server.
+control_client.py - Python client for the WPR control server.
 
 Protocol:
   - TCP to (host, port)
@@ -45,7 +45,7 @@ class WpsControlClient:
                 self._bind_remote_commands()
             except Exception as e:
                 # Don’t explode in __init__, you can still use call()
-                print(f"[PPR ctl] Warning: failed to bind remote commands: {e!r}")
+                print(f"[WPR ctl] Warning: failed to bind remote commands: {e!r}")
 
     # -------------------------------------------------------------------------
     # Low-level transport

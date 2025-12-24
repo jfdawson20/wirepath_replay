@@ -1,5 +1,5 @@
 
-#include "ppr_acl_db.h"
+#include "wpr_acl_db.h"
 
 
 /** 
@@ -7,7 +7,7 @@
 * @param db
 *   Pointer to ACL rule database structure to initialize.   
 **/
-void ppr_acl_rule_db_init(ppr_acl_rule_db_t *db)
+void wpr_acl_rule_db_init(wpr_acl_rule_db_t *db)
 {
     memset(db, 0, sizeof(*db));
 
@@ -28,24 +28,24 @@ void ppr_acl_rule_db_init(ppr_acl_rule_db_t *db)
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_db_add_ip4_rule(ppr_acl_rule_db_t *db,const ppr_acl_ip4_rule_cfg_t *spec, uint32_t *out_rule_id)
+int wpr_acl_db_add_ip4_rule(wpr_acl_rule_db_t *db,const wpr_acl_ip4_rule_cfg_t *spec, uint32_t *out_rule_id)
 {
     if (!db || !spec )
         return -EINVAL;
 
-    ppr_acl_ip4_rule_db_t *ip4 = &db->ip4;
+    wpr_acl_ip4_rule_db_t *ip4 = &db->ip4;
 
     // find a free slot
     uint32_t idx;
-    for (idx = 0; idx < PPR_ACL_MAX_RULES; idx++) {
+    for (idx = 0; idx < WPR_ACL_MAX_RULES; idx++) {
         if (!ip4->used[idx])
             break;
     }
-    if (idx == PPR_ACL_MAX_RULES)
+    if (idx == WPR_ACL_MAX_RULES)
         return -ENOSPC;
 
     // copy spec into DB slot
-    ppr_acl_ip4_rule_cfg_t *dst = &ip4->rules[idx];
+    wpr_acl_ip4_rule_cfg_t *dst = &ip4->rules[idx];
     *dst = *spec;
     dst->rule_id = idx;          // enforce invariant: rule_id == array index
 
@@ -72,31 +72,31 @@ int ppr_acl_db_add_ip4_rule(ppr_acl_rule_db_t *db,const ppr_acl_ip4_rule_cfg_t *
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_db_add_ip6_rule(ppr_acl_rule_db_t *db,const ppr_acl_ip6_rule_cfg_t *spec, uint32_t *out_rule_id)
+int wpr_acl_db_add_ip6_rule(wpr_acl_rule_db_t *db,const wpr_acl_ip6_rule_cfg_t *spec, uint32_t *out_rule_id)
 {
     if (!db || !spec ){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                "ppr_acl_db_add_ip6_rule: invalid parameters\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                "wpr_acl_db_add_ip6_rule: invalid parameters\n");
         return -EINVAL;
     }
 
-    ppr_acl_ip6_rule_db_t *ip6 = &db->ip6;
+    wpr_acl_ip6_rule_db_t *ip6 = &db->ip6;
 
     // find a free slot
     uint32_t idx;
-    for (idx = 0; idx < PPR_ACL_MAX_RULES; idx++) {
+    for (idx = 0; idx < WPR_ACL_MAX_RULES; idx++) {
         if (!ip6->used[idx]){
             break;
         }
     }
-    if (idx == PPR_ACL_MAX_RULES){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                "ppr_acl_db_add_ip6_rule: no free slots available\n");
+    if (idx == WPR_ACL_MAX_RULES){
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                "wpr_acl_db_add_ip6_rule: no free slots available\n");
         return -ENOSPC;
     }
 
     // copy spec into DB slot
-    ppr_acl_ip6_rule_cfg_t *dst = &ip6->rules[idx];
+    wpr_acl_ip6_rule_cfg_t *dst = &ip6->rules[idx];
     *dst = *spec;
     dst->rule_id = idx;          // enforce invariant: rule_id == array index
 
@@ -125,24 +125,24 @@ int ppr_acl_db_add_ip6_rule(ppr_acl_rule_db_t *db,const ppr_acl_ip6_rule_cfg_t *
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_db_add_l2_rule(ppr_acl_rule_db_t *db,const ppr_acl_l2_rule_cfg_t *spec,uint32_t *out_rule_id)
+int wpr_acl_db_add_l2_rule(wpr_acl_rule_db_t *db,const wpr_acl_l2_rule_cfg_t *spec,uint32_t *out_rule_id)
 {
     if (!db || !spec)
         return -EINVAL;
 
-    ppr_acl_l2_rule_db_t *l2 = &db->l2;
+    wpr_acl_l2_rule_db_t *l2 = &db->l2;
 
     // find a free slot
     uint32_t idx;
-    for (idx = 0; idx < PPR_ACL_MAX_RULES; idx++) {
+    for (idx = 0; idx < WPR_ACL_MAX_RULES; idx++) {
         if (!l2->used[idx])
             break;
     }
-    if (idx == PPR_ACL_MAX_RULES)
+    if (idx == WPR_ACL_MAX_RULES)
         return -ENOSPC;
 
     // copy spec into DB slot
-    ppr_acl_l2_rule_cfg_t *dst = &l2->rules[idx];
+    wpr_acl_l2_rule_cfg_t *dst = &l2->rules[idx];
     *dst = *spec;
     dst->rule_id = idx;          // enforce invariant: rule_id == array index
 
@@ -167,14 +167,14 @@ int ppr_acl_db_add_l2_rule(ppr_acl_rule_db_t *db,const ppr_acl_l2_rule_cfg_t *sp
 * @return
 *   0 on success, negative errno on failure.    
 **/
-int ppr_acl_db_del_ip4_rule(ppr_acl_rule_db_t *db, uint32_t rule_id)
+int wpr_acl_db_del_ip4_rule(wpr_acl_rule_db_t *db, uint32_t rule_id)
 {
     if (!db)
         return -EINVAL;
 
-    ppr_acl_ip4_rule_db_t *ip4 = &db->ip4;
+    wpr_acl_ip4_rule_db_t *ip4 = &db->ip4;
 
-    if (rule_id >= PPR_ACL_MAX_RULES || !ip4->used[rule_id])
+    if (rule_id >= WPR_ACL_MAX_RULES || !ip4->used[rule_id])
         return -ENOENT;
 
     ip4->used[rule_id] = false;
@@ -203,14 +203,14 @@ int ppr_acl_db_del_ip4_rule(ppr_acl_rule_db_t *db, uint32_t rule_id)
 * @return
 *   0 on success, negative errno on failure.    
 **/
-int ppr_acl_db_del_ip6_rule(ppr_acl_rule_db_t *db, uint32_t rule_id)
+int wpr_acl_db_del_ip6_rule(wpr_acl_rule_db_t *db, uint32_t rule_id)
 {
     if (!db)
         return -EINVAL;
 
-    ppr_acl_ip6_rule_db_t *ip6 = &db->ip6;
+    wpr_acl_ip6_rule_db_t *ip6 = &db->ip6;
 
-    if (rule_id >= PPR_ACL_MAX_RULES || !ip6->used[rule_id])
+    if (rule_id >= WPR_ACL_MAX_RULES || !ip6->used[rule_id])
         return -ENOENT;
 
     ip6->used[rule_id] = false;
@@ -239,14 +239,14 @@ int ppr_acl_db_del_ip6_rule(ppr_acl_rule_db_t *db, uint32_t rule_id)
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_db_del_l2_rule(ppr_acl_rule_db_t *db, uint32_t rule_id)
+int wpr_acl_db_del_l2_rule(wpr_acl_rule_db_t *db, uint32_t rule_id)
 {
     if (!db)
         return -EINVAL;
 
-    ppr_acl_l2_rule_db_t *l2 = &db->l2;
+    wpr_acl_l2_rule_db_t *l2 = &db->l2;
 
-    if (rule_id >= PPR_ACL_MAX_RULES || !l2->used[rule_id])
+    if (rule_id >= WPR_ACL_MAX_RULES || !l2->used[rule_id])
         return -ENOENT;
 
     l2->used[rule_id] = false;
@@ -277,16 +277,16 @@ int ppr_acl_db_del_l2_rule(ppr_acl_rule_db_t *db, uint32_t rule_id)
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_db_update_ip4_rule(ppr_acl_rule_db_t *db,uint32_t rule_id,const ppr_acl_ip4_rule_cfg_t *spec)
+int wpr_acl_db_update_ip4_rule(wpr_acl_rule_db_t *db,uint32_t rule_id,const wpr_acl_ip4_rule_cfg_t *spec)
 {
     if (!db || !spec)
         return -EINVAL;
 
-    ppr_acl_ip4_rule_db_t *ip4 = &db->ip4;
-    if (rule_id >= PPR_ACL_MAX_RULES || !ip4->used[rule_id])
+    wpr_acl_ip4_rule_db_t *ip4 = &db->ip4;
+    if (rule_id >= WPR_ACL_MAX_RULES || !ip4->used[rule_id])
         return -ENOENT;
 
-    ppr_acl_ip4_rule_cfg_t *dst = &ip4->rules[rule_id];
+    wpr_acl_ip4_rule_cfg_t *dst = &ip4->rules[rule_id];
     *dst = *spec;
     dst->rule_id = rule_id;  // preserve invariant
 
@@ -306,16 +306,16 @@ int ppr_acl_db_update_ip4_rule(ppr_acl_rule_db_t *db,uint32_t rule_id,const ppr_
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_db_update_ip6_rule(ppr_acl_rule_db_t *db,uint32_t rule_id,const ppr_acl_ip6_rule_cfg_t *spec)
+int wpr_acl_db_update_ip6_rule(wpr_acl_rule_db_t *db,uint32_t rule_id,const wpr_acl_ip6_rule_cfg_t *spec)
 {
     if (!db || !spec)
         return -EINVAL;
 
-    ppr_acl_ip6_rule_db_t *ip6 = &db->ip6;
-    if (rule_id >= PPR_ACL_MAX_RULES || !ip6->used[rule_id])
+    wpr_acl_ip6_rule_db_t *ip6 = &db->ip6;
+    if (rule_id >= WPR_ACL_MAX_RULES || !ip6->used[rule_id])
         return -ENOENT;
 
-    ppr_acl_ip6_rule_cfg_t *dst = &ip6->rules[rule_id];
+    wpr_acl_ip6_rule_cfg_t *dst = &ip6->rules[rule_id];
     *dst = *spec;
     dst->rule_id = rule_id;  // preserve invariant
 
@@ -335,16 +335,16 @@ int ppr_acl_db_update_ip6_rule(ppr_acl_rule_db_t *db,uint32_t rule_id,const ppr_
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_db_update_l2_rule(ppr_acl_rule_db_t *db,uint32_t rule_id,const ppr_acl_l2_rule_cfg_t *spec)
+int wpr_acl_db_update_l2_rule(wpr_acl_rule_db_t *db,uint32_t rule_id,const wpr_acl_l2_rule_cfg_t *spec)
 {
     if (!db || !spec)
         return -EINVAL;
 
-    ppr_acl_l2_rule_db_t *l2 = &db->l2;
-    if (rule_id >= PPR_ACL_MAX_RULES || !l2->used[rule_id])
+    wpr_acl_l2_rule_db_t *l2 = &db->l2;
+    if (rule_id >= WPR_ACL_MAX_RULES || !l2->used[rule_id])
         return -ENOENT;
 
-    ppr_acl_l2_rule_cfg_t *dst = &l2->rules[rule_id];
+    wpr_acl_l2_rule_cfg_t *dst = &l2->rules[rule_id];
     *dst = *spec;
     dst->rule_id = rule_id;  // preserve invariant
 
@@ -360,7 +360,7 @@ int ppr_acl_db_update_l2_rule(ppr_acl_rule_db_t *db,uint32_t rule_id,const ppr_a
 * @return
 *   Highest priority value on success, negative errno on failure.
 **/
-int ppr_acl_db_get_highest_priority(ppr_acl_rule_db_t * db){
+int wpr_acl_db_get_highest_priority(wpr_acl_rule_db_t * db){
 
     if(!db){
         return -EINVAL;
@@ -369,10 +369,10 @@ int ppr_acl_db_get_highest_priority(ppr_acl_rule_db_t * db){
     int highest_priority = -1;
 
     //check IPv4 rules
-    ppr_acl_ip4_rule_db_t * ip4_db = &db->ip4;
-    for(unsigned int i=0; i < PPR_ACL_MAX_RULES; i++){
+    wpr_acl_ip4_rule_db_t * ip4_db = &db->ip4;
+    for(unsigned int i=0; i < WPR_ACL_MAX_RULES; i++){
         if(ip4_db->used[i]){
-            ppr_acl_ip4_rule_cfg_t * rule_cfg = &ip4_db->rules[i];
+            wpr_acl_ip4_rule_cfg_t * rule_cfg = &ip4_db->rules[i];
             if(rule_cfg->priority > highest_priority){
                 highest_priority = rule_cfg->priority;
             }
@@ -380,10 +380,10 @@ int ppr_acl_db_get_highest_priority(ppr_acl_rule_db_t * db){
     }
 
     //check IPv6 rules
-    ppr_acl_ip6_rule_db_t * ip6_db = &db->ip6;
-    for(unsigned int i=0; i < PPR_ACL_MAX_RULES; i++){
+    wpr_acl_ip6_rule_db_t * ip6_db = &db->ip6;
+    for(unsigned int i=0; i < WPR_ACL_MAX_RULES; i++){
         if(ip6_db->used[i]){
-            ppr_acl_ip6_rule_cfg_t * rule_cfg = &ip6_db->rules[i];
+            wpr_acl_ip6_rule_cfg_t * rule_cfg = &ip6_db->rules[i];
             if(rule_cfg->priority > highest_priority){
                 highest_priority = rule_cfg->priority;
             }
@@ -391,10 +391,10 @@ int ppr_acl_db_get_highest_priority(ppr_acl_rule_db_t * db){
     }
 
     //check L2 rules
-    ppr_acl_l2_rule_db_t * l2_db = &db->l2;
-    for(unsigned int i=0; i < PPR_ACL_MAX_RULES; i++){
+    wpr_acl_l2_rule_db_t * l2_db = &db->l2;
+    for(unsigned int i=0; i < WPR_ACL_MAX_RULES; i++){
         if(l2_db->used[i]){
-            ppr_acl_l2_rule_cfg_t * rule_cfg = &l2_db->rules[i];
+            wpr_acl_l2_rule_cfg_t * rule_cfg = &l2_db->rules[i];
             if(rule_cfg->priority > highest_priority){
                 highest_priority = rule_cfg->priority;
             }
@@ -414,19 +414,19 @@ int ppr_acl_db_get_highest_priority(ppr_acl_rule_db_t * db){
 * @return
 *   Pointer to highest priority matching L2 rule cfg on success, negative errno on failure.
 **/
-ppr_acl_l2_rule_cfg_t *ppr_acl_l2_get_highest_rule_by_ingress_port_id(ppr_acl_rule_db_t * db, uint16_t ingress_port_id){
+wpr_acl_l2_rule_cfg_t *wpr_acl_l2_get_highest_rule_by_ingress_port_id(wpr_acl_rule_db_t * db, uint16_t ingress_port_id){
 
     if(!db){
         return NULL;
     }
-    ppr_acl_l2_rule_cfg_t *out_rule_cfg = NULL; 
+    wpr_acl_l2_rule_cfg_t *out_rule_cfg = NULL; 
     
-    ppr_acl_l2_rule_db_t * l2_db = &db->l2;
+    wpr_acl_l2_rule_db_t * l2_db = &db->l2;
 
     int hightest_priority = -1; 
-    for(unsigned int i=0; i < PPR_ACL_MAX_RULES; i++){
+    for(unsigned int i=0; i < WPR_ACL_MAX_RULES; i++){
         if(l2_db->used[i]){
-            ppr_acl_l2_rule_cfg_t * rule_cfg = &l2_db->rules[i];
+            wpr_acl_l2_rule_cfg_t * rule_cfg = &l2_db->rules[i];
             if(rule_cfg->in_port_lo <= ingress_port_id && rule_cfg->in_port_hi >= ingress_port_id){
                 //match
                 if(rule_cfg->priority > hightest_priority){
@@ -453,65 +453,65 @@ ppr_acl_l2_rule_cfg_t *ppr_acl_l2_get_highest_rule_by_ingress_port_id(ppr_acl_ru
 * @return
 *   0 on success, negative errno on failure.    
 **/
-int ppr_acl_db_commit(ppr_acl_runtime_t *rt, ppr_acl_rule_db_t *db)
+int wpr_acl_db_commit(wpr_acl_runtime_t *rt, wpr_acl_rule_db_t *db)
 {
     uint32_t max_ip4_rules = db->ip4.active_count;
     uint32_t max_ip6_rules = db->ip6.active_count;
     uint32_t max_l2_rules  = db->l2.active_count;
 
     if (!rt || !db){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                "ppr_acl_db_commit: invalid parameters\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                "wpr_acl_db_commit: invalid parameters\n");
         return -EINVAL;
     }
 
     // If nothing changed, skip rebuild
     if (!db->ip4.dirty && !db->ip6.dirty && !db->l2.dirty){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO,
-                "ppr_acl_db_commit: no changes detected, skipping rebuild\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO,
+                "wpr_acl_db_commit: no changes detected, skipping rebuild\n");
         return 0;
     }
 
-    ppr_acl_build_ctx_t bld;
-    int rc = ppr_acl_build_begin(&bld, rt, max_ip4_rules, max_ip6_rules, max_l2_rules);
+    wpr_acl_build_ctx_t bld;
+    int rc = wpr_acl_build_begin(&bld, rt, max_ip4_rules, max_ip6_rules, max_l2_rules);
     if (rc < 0){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                "ppr_acl_build_begin failed rc=%d\n", rc);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                "wpr_acl_build_begin failed rc=%d\n", rc);
         return rc;
     }
 
     // Re-add all active IPv4 rules
     if (db->ip4.active_count > 0) {
-        ppr_acl_ip4_rule_db_t *ip4db = &db->ip4;
+        wpr_acl_ip4_rule_db_t *ip4db = &db->ip4;
         for (uint32_t i = 0; i <= ip4db->max_rule_id; i++) {
             if (!ip4db->used[i])
                 continue;
 
-            ppr_acl_ip4_rule_cfg_t *cfg = &ip4db->rules[i];
+            wpr_acl_ip4_rule_cfg_t *cfg = &ip4db->rules[i];
             // cfg->rule_id is already i
-            rc = ppr_acl_build_add_ip4_rule(&bld, cfg);
+            rc = wpr_acl_build_add_ip4_rule(&bld, cfg);
             if (rc < 0) {
-                PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                        "ppr_acl_build_add_ip4_rule failed rc=%d\n", rc);
-                ppr_acl_build_abort(&bld);
+                WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                        "wpr_acl_build_add_ip4_rule failed rc=%d\n", rc);
+                wpr_acl_build_abort(&bld);
                 return rc;
             }
         }
     }
 
     if (db->ip6.active_count > 0) {
-        ppr_acl_ip6_rule_db_t *ip6db = &db->ip6;
+        wpr_acl_ip6_rule_db_t *ip6db = &db->ip6;
         for (uint32_t i = 0; i <= ip6db->max_rule_id; i++) {
             if (!ip6db->used[i])
                 continue;
 
-            ppr_acl_ip6_rule_cfg_t *cfg = &ip6db->rules[i];
+            wpr_acl_ip6_rule_cfg_t *cfg = &ip6db->rules[i];
             // cfg->rule_id is already i
-            rc = ppr_acl_build_add_ip6_rule(&bld, cfg);
+            rc = wpr_acl_build_add_ip6_rule(&bld, cfg);
             if (rc < 0) {
-                PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                        "ppr_acl_build_add_ip6_rule failed rc=%d\n", rc);
-                ppr_acl_build_abort(&bld);
+                WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                        "wpr_acl_build_add_ip6_rule failed rc=%d\n", rc);
+                wpr_acl_build_abort(&bld);
                 return rc;
             }
         }
@@ -519,28 +519,28 @@ int ppr_acl_db_commit(ppr_acl_runtime_t *rt, ppr_acl_rule_db_t *db)
 
     // Re-add all active L2 rules
     if (db->l2.active_count > 0) {
-        ppr_acl_l2_rule_db_t *l2db = &db->l2;
+        wpr_acl_l2_rule_db_t *l2db = &db->l2;
         for (uint32_t i = 0; i <= l2db->max_rule_id; i++) {
             if (!l2db->used[i])
                 continue;
 
-            ppr_acl_l2_rule_cfg_t *cfg = &l2db->rules[i];
-            rc = ppr_acl_build_add_l2_rule(&bld, cfg);
+            wpr_acl_l2_rule_cfg_t *cfg = &l2db->rules[i];
+            rc = wpr_acl_build_add_l2_rule(&bld, cfg);
             if (rc < 0) {
-                PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                        "ppr_acl_build_add_l2_rule failed rc=%d\n", rc);
-                ppr_acl_build_abort(&bld);
+                WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                        "wpr_acl_build_add_l2_rule failed rc=%d\n", rc);
+                wpr_acl_build_abort(&bld);
                 return rc;
             }
         }
     }
 
     // Swap into runtime (QSBR handles retire)
-    rc = ppr_acl_build_commit(rt, &bld);
+    rc = wpr_acl_build_commit(rt, &bld);
     if (rc < 0) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
-                "ppr_acl_build_commit failed rc=%d\n", rc);
-        ppr_acl_build_abort(&bld);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
+                "wpr_acl_build_commit failed rc=%d\n", rc);
+        wpr_acl_build_abort(&bld);
         return rc;
     }
 
@@ -558,54 +558,54 @@ int ppr_acl_db_commit(ppr_acl_runtime_t *rt, ppr_acl_rule_db_t *db)
 
 /* --------------------------- Debug Prints -------------------------------------  */
 
-void ppr_acl_db_dump_status(ppr_acl_rule_db_t *db)
+void wpr_acl_db_dump_status(wpr_acl_rule_db_t *db)
 {
     if (!db)
         return;
 
-    ppr_acl_ip4_rule_db_t *ip4 = &db->ip4;
-    ppr_acl_ip6_rule_db_t *ip6 = &db->ip6;
-    ppr_acl_l2_rule_db_t  *l2  = &db->l2;
+    wpr_acl_ip4_rule_db_t *ip4 = &db->ip4;
+    wpr_acl_ip6_rule_db_t *ip6 = &db->ip6;
+    wpr_acl_l2_rule_db_t  *l2  = &db->l2;
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO,
             "ACL DB Status: IP4 active=%u max_id=%u dirty=%s\n",
             ip4->active_count,
             ip4->max_rule_id,
             ip4->dirty ? "yes" : "no");
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO,
             "ACL DB Status: IP6 active=%u max_id=%u dirty=%s\n",
             ip6->active_count,
             ip6->max_rule_id,
             ip6->dirty ? "yes" : "no");
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO,
             "ACL DB Status: L2  active=%u max_id=%u dirty=%s\n",
             l2->active_count,
             l2->max_rule_id,
             l2->dirty ? "yes" : "no");
 
     //dump all ipv4 rules 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO, "\nACL DB IPv4 Rules:\n");
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO, "\nACL DB IPv4 Rules:\n");
     for (unsigned int i=0; i <= ip4->max_rule_id; i++){
         if(ip4->used[i]){
-            ppr_acl_print_ip4_rule(&ip4->rules[i]);
+            wpr_acl_print_ip4_rule(&ip4->rules[i]);
         }
     }
 
     //dump all ipv6 rules
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO, "\nACL DB IPv6 Rules:\n");
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO, "\nACL DB IPv6 Rules:\n");
     for (unsigned int i=0; i <= ip6->max_rule_id; i++){
         if(ip6->used[i]){
-            ppr_acl_print_ip6_rule(&ip6->rules[i]);
+            wpr_acl_print_ip6_rule(&ip6->rules[i]);
         }
     }
 
     //dump all l2 rules
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO, "\nACL DB L2 Rules:\n");
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO, "\nACL DB L2 Rules:\n");
     for (unsigned int i=0; i <= l2->max_rule_id; i++){
         if(l2->used[i]){
-            ppr_acl_print_l2_rule(&l2->rules[i]);
+            wpr_acl_print_l2_rule(&l2->rules[i]);
         }
     }
 }   

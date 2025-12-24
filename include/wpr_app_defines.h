@@ -27,19 +27,19 @@ Description: header file containing app wide constants and structs
 #define MAX_PORTS 8 
 
 /* Forward declarations for types only used via pointer in this header */
-typedef struct ppr_global_policy_epoch  ppr_global_policy_epoch_t;   
-typedef struct ppr_acl_rule_db          ppr_acl_rule_db_t;
-typedef struct ppr_acl_runtime          ppr_acl_runtime_t;
-typedef struct ppr_rcu_ctx              ppr_rcu_ctx_t;
-typedef struct ppr_ports                ppr_ports_t; 
-typedef struct ppr_stats_all            ppr_stats_all_t;
+typedef struct wpr_global_policy_epoch  wpr_global_policy_epoch_t;   
+typedef struct wpr_acl_rule_db          wpr_acl_rule_db_t;
+typedef struct wpr_acl_runtime          wpr_acl_runtime_t;
+typedef struct wpr_rcu_ctx              wpr_rcu_ctx_t;
+typedef struct wpr_ports                wpr_ports_t; 
+typedef struct wpr_stats_all            wpr_stats_all_t;
 typedef struct pcap_loader_ctl          pcap_loader_ctl_t;
 typedef struct pcap_storage             pcap_storage_t;
-typedef struct ppr_tx_worker_ctx        ppr_tx_worker_ctx_t;
-typedef struct ppr_port_stream_global   ppr_port_stream_global_t;
+typedef struct wpr_tx_worker_ctx        wpr_tx_worker_ctx_t;
+typedef struct wpr_port_stream_global   wpr_port_stream_global_t;
 
 /* per thread struct with globals */
-typedef struct ppr_thread_args{
+typedef struct wpr_thread_args{
 
     //identifiers
     unsigned int            core_id; 
@@ -50,13 +50,13 @@ typedef struct ppr_thread_args{
     _Atomic  bool           thread_ready;    //written by thread, read by main, one per thread
 
     //traffic gen control/status
-    ppr_tx_worker_ctx_t      *tx_worker_ctx; //used by tx workers only
-    ppr_port_stream_global_t *port_stream_global_cfg; //pointer to list of global port stream configs
+    wpr_tx_worker_ctx_t      *tx_worker_ctx; //used by tx workers only
+    wpr_port_stream_global_t *port_stream_global_cfg; //pointer to list of global port stream configs
     int                      mbuf_ts_off;
 
     //stats & control structs
-    ppr_ports_t             *global_port_list;
-    ppr_stats_all_t         *global_stats;
+    wpr_ports_t             *global_port_list;
+    wpr_stats_all_t         *global_stats;
 
     //pcap loader / storage interfaces 
     pcap_loader_ctl_t       *pcap_controller;
@@ -67,17 +67,17 @@ typedef struct ppr_thread_args{
     struct rte_mempool      *txcore_copy_mpools;
 
     //QSBR Context
-    ppr_rcu_ctx_t              *rcu_ctx;
+    wpr_rcu_ctx_t              *rcu_ctx;
 
     //acl rules interface 
-    ppr_acl_rule_db_t            *acl_rule_db;
-    ppr_acl_runtime_t            *acl_runtime;
+    wpr_acl_rule_db_t            *acl_rule_db;
+    wpr_acl_runtime_t            *acl_runtime;
 
     //app controller settings
     int                         controller_port;
 
 
-} ppr_thread_args_t;
+} wpr_thread_args_t;
 
 
 struct core_mapping {
@@ -91,6 +91,6 @@ struct core_mapping {
 extern _Atomic int wps_fatal_error;
 extern volatile sig_atomic_t force_quit;
 
-void ppr_fatal(const char *fmt, ...);
+void wpr_fatal(const char *fmt, ...);
 
 #endif 

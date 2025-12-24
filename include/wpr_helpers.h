@@ -1,5 +1,5 @@
-#ifndef PPR_HELPERS_H
-#define PPR_HELPERS_H
+#ifndef WPR_HELPERS_H
+#define WPR_HELPERS_H
 
 #include <stdlib.h>
 #include <string.h>
@@ -30,4 +30,4 @@ static inline int parse_mac(const char *s, struct rte_ether_addr *mac)
     return 0;
 }
 
-#endif /* PPR_HELPERS_H */
+#endif /* WPR_HELPERS_H */

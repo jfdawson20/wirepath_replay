@@ -37,15 +37,15 @@ Description:
 
 #include "rte_malloc.h"
 
-#include "ppr_pcap_loader.h"
-#include "ppr_app_defines.h"
-#include "ppr_mbuf_fields.h"
-#include "ppr_control.h"
-#include "ppr_acl_yaml.h"
-#include "ppr_log.h"
-#include "ppr_acl.h"
-#include "ppr_flowkey.h"
-#include "ppr_header_extract.h"
+#include "wpr_pcap_loader.h"
+#include "wpr_app_defines.h"
+#include "wpr_mbuf_fields.h"
+#include "wpr_control.h"
+#include "wpr_acl_yaml.h"
+#include "wpr_log.h"
+#include "wpr_acl.h"
+#include "wpr_flowkey.h"
+#include "wpr_header_extract.h"
 
 
 /* ------------------------------- dynamic mbuf array functions -------------------------- */
@@ -94,7 +94,7 @@ static void mbuf_array_free(struct mbuf_array *arr) {
 
 static void pcap_storage_init(struct pcap_storage *st) {
     if (!st) return;
-    for (unsigned i = 0; i < PPR_MAX_PCAP_SLOTS; i++) {
+    for (unsigned i = 0; i < WPR_MAX_PCAP_SLOTS; i++) {
         atomic_store_explicit(&st->slots[i], NULL, memory_order_relaxed);
     }
     atomic_store_explicit(&st->published_count, 0, memory_order_relaxed);
@@ -105,7 +105,7 @@ static int pcap_storage_alloc_slotid(struct pcap_storage *st, unsigned int *slot
     if (!st || !slotid_out) return -EINVAL;
 
     uint32_t id = atomic_fetch_add_explicit(&st->published_count, 1, memory_order_relaxed);
-    if (id >= PPR_MAX_PCAP_SLOTS) {
+    if (id >= WPR_MAX_PCAP_SLOTS) {
         /* roll back (best-effort). If multiple threads allocate, you might not want rollback;
            here only loader allocates so rollback is safe-ish. */
         atomic_fetch_sub_explicit(&st->published_count, 1, memory_order_relaxed);
@@ -129,7 +129,7 @@ static void pcap_storage_free(struct pcap_storage *st) {
     if (!st) return;
 
     uint32_t max = atomic_load_explicit(&st->published_count, memory_order_relaxed);
-    if (max > PPR_MAX_PCAP_SLOTS) max = PPR_MAX_PCAP_SLOTS;
+    if (max > WPR_MAX_PCAP_SLOTS) max = WPR_MAX_PCAP_SLOTS;
 
     for (uint32_t i = 0; i < max; i++) {
         struct pcap_mbuff_slot *slot =
@@ -216,29 +216,29 @@ static uint64_t ts_to_ns(const struct pcap_pkthdr *h, int prec) {
 * @param l2_flow_key
 *   Pointer to L2 flow key structure.
 **/
-static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
-                                      ppr_acl_rule_db_t *acl_db,
+static inline void process_acl_lookup(wpr_acl_runtime_t *acl_runtime_ctx,
+                                      wpr_acl_rule_db_t *acl_db,
                                       struct rte_mbuf *m,
-                                      ppr_hdrs_t *hdrs,
+                                      wpr_hdrs_t *hdrs,
                                       bool ip_flowkey_valid,
-                                      const ppr_flow_key_t *ip_flow_key,
+                                      const wpr_flow_key_t *ip_flow_key,
                                       bool l2_flowkey_valid,
-                                      const ppr_l2_flow_key_t *l2_flow_key,
+                                      const wpr_l2_flow_key_t *l2_flow_key,
                                       unsigned int thread_index)
 {
 
     (void)acl_db; //unused for now
 
-    ppr_acl_stats_shard_t *acl_stats_shard = &acl_runtime_ctx->stats_shards[thread_index];
+    wpr_acl_stats_shard_t *acl_stats_shard = &acl_runtime_ctx->stats_shards[thread_index];
 
-    ppr_policy_action_t ip_acl_action = {0};
-    ppr_policy_action_t l2_acl_action = {0};
+    wpr_policy_action_t ip_acl_action = {0};
+    wpr_policy_action_t l2_acl_action = {0};
 
-    ppr_priv_t *priv = ppr_priv(m);
+    wpr_priv_t *priv = wpr_priv(m);
     int rc = 0;
 
     if (!acl_runtime_ctx || !hdrs) {
-        PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Null argument passed to process_acl_lookup\n");
+        WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Null argument passed to process_acl_lookup\n");
         return;
     }
 
@@ -246,34 +246,34 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     //perform ACL lookups into both tables if we have valid flow keys
     //lookup l2 action if we have a valid l2 flow key
     if(l2_flow_key && l2_flowkey_valid){
-        rc = ppr_acl_classify_l2(acl_runtime_ctx,
+        rc = wpr_acl_classify_l2(acl_runtime_ctx,
                                  l2_flow_key,
                                  &l2_acl_action);
 
         if (rc < 0) {
-            PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR,"ACL L2 lookup failed with error %d\n", rc);
+            WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR,"ACL L2 lookup failed with error %d\n", rc);
             return;
         }
     }
 
     //now L3 lookup if we have a valid ip flow key
     if(ip_flow_key && ip_flowkey_valid){
-        rc = ppr_acl_classify_ip(acl_runtime_ctx,
+        rc = wpr_acl_classify_ip(acl_runtime_ctx,
                                  ip_flow_key,
                                  m->port,
                                  &ip_acl_action);
 
         if (rc < 0) {
-            PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR,"ACL lookup failed with error %d\n", rc);
+            WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR,"ACL lookup failed with error %d\n", rc);
             return;
         }
     }
 
     //if we only have one valid policy, apply that, else go by priority
-    ppr_policy_action_t *selected_action = NULL;
+    wpr_policy_action_t *selected_action = NULL;
     bool is_l2_action = false;
     if(l2_acl_action.hit && !ip_acl_action.hit){
-        PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_DP, RTE_LOG_DEBUG,
                 "L2 ACL matched: applying action\n");
 
         selected_action = &l2_acl_action;
@@ -281,7 +281,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
 
     }
     else if (ip_acl_action.hit && !l2_acl_action.hit){
-        PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_DP, RTE_LOG_DEBUG,
                 "IP ACL matched: applying action\n");
 
         selected_action = &ip_acl_action;
@@ -290,14 +290,14 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     else if (l2_acl_action.hit && ip_acl_action.hit){
         //both hit, choose by priority
         if (l2_acl_action.priority >= ip_acl_action.priority){
-            PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG,
+            WPR_LOG(WPR_LOG_DP, RTE_LOG_DEBUG,
                     "Both L2 and IP ACL matched: applying L2 action due to higher priority\n");
 
             selected_action = &l2_acl_action;
             is_l2_action = true;
         }
         else{
-            PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG,
+            WPR_LOG(WPR_LOG_DP, RTE_LOG_DEBUG,
                     "Both L2 and IP ACL matched: applying IP action due to higher priority\n");
 
             selected_action = &ip_acl_action;
@@ -306,7 +306,7 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
     }
     else{
         //no hits
-        PPR_LOG(PPR_LOG_DP, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_DP, RTE_LOG_DEBUG,
                 "No ACL match found\n");
         return;
     }
@@ -322,16 +322,16 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
 
     //set the correct L3 type field for later use
     if(is_l2_action)
-        priv->acl_policy_type = PPR_L3_NONE;
+        priv->acl_policy_type = WPR_L3_NONE;
     else
         priv->acl_policy_type = hdrs->l3_type;
 
 
     //increment acl stats 
-    if(priv->acl_policy_type == PPR_L3_IPV4){
+    if(priv->acl_policy_type == WPR_L3_IPV4){
         atomic_fetch_add_explicit(&acl_stats_shard->ip4[priv->acl_policy_index].new_flows, 1, memory_order_relaxed);
     }
-    else if (priv->acl_policy_type == PPR_L3_IPV6){
+    else if (priv->acl_policy_type == WPR_L3_IPV6){
         atomic_fetch_add_explicit(&acl_stats_shard->ip6[priv->acl_policy_index].new_flows, 1, memory_order_relaxed);
     }
     else{
@@ -350,12 +350,12 @@ static inline void process_acl_lookup(ppr_acl_runtime_t *acl_runtime_ctx,
  * - Reads PCAP, fills mbufs
  * - Publishes slot pointer atomically when complete
  */
-static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
+static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
     if (!thread_args || !filename) 
         return -EINVAL;
 
-    ppr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
-    ppr_ports_t *global_port_list = thread_args->global_port_list;
+    wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
+    wpr_ports_t *global_port_list = thread_args->global_port_list;
 
     if(!acl_db || !global_port_list){
         return -EINVAL;
@@ -373,7 +373,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
 
     /* Parse yaml file */
     char *pcap_filepath_out=NULL;
-    rc = ppr_acl_load_startup_file(filename,acl_db,global_port_list,&pcap_filepath_out);
+    rc = wpr_acl_load_startup_file(filename,acl_db,global_port_list,&pcap_filepath_out);
     if (rc < 0) {
         fprintf(stderr, "Failed to parse ACL YAML file %s: rc=%d\n", filename, rc);
         return rc;
@@ -401,7 +401,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     unsigned int slotid = 0;
     int s_rc = pcap_storage_alloc_slotid(st, &slotid);
     if (s_rc != 0) {
-        fprintf(stderr, "pcap_storage full (max=%u)\n", PPR_MAX_PCAP_SLOTS);
+        fprintf(stderr, "pcap_storage full (max=%u)\n", WPR_MAX_PCAP_SLOTS);
         return s_rc;
     }
 
@@ -422,7 +422,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
     }
 
     //commit acl rules to runtime before processing pcap
-    rc = ppr_acl_db_commit(thread_args->acl_runtime, thread_args->acl_rule_db);
+    rc = wpr_acl_db_commit(thread_args->acl_runtime, thread_args->acl_rule_db);
     if (rc != 0){
         rte_exit(EXIT_FAILURE, "Failed to commit loaded ACL rules to runtime\n");
     }
@@ -468,10 +468,10 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
 
         
         //parse header structure from packet
-        ppr_hdrs_t hdrs; 
-        rc = ppr_parse_headers(m, &hdrs);
+        wpr_hdrs_t hdrs; 
+        rc = wpr_parse_headers(m, &hdrs);
         if (rc < 0) {
-            PPR_LOG(PPR_LOG_DP, RTE_LOG_ERR, "Failed to parse headers for ACL lookup\n");
+            WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Failed to parse headers for ACL lookup\n");
             rte_pktmbuf_free(m);
             pcap_close(pc);
             mbuf_array_free(mbuff_array);
@@ -482,22 +482,22 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
 
         //build flow keys 
         bool l2_flowkey_valid = false;
-        ppr_l2_flow_key_t l2_flow_key = {0};
+        wpr_l2_flow_key_t l2_flow_key = {0};
     
-        rc = ppr_l2_flowkey_from_hdr(&hdrs, &l2_flow_key, slotid);
+        rc = wpr_l2_flowkey_from_hdr(&hdrs, &l2_flow_key, slotid);
         if (rc == 0){
             l2_flowkey_valid = true;
         }
 
         bool ip_flowkey_valid = false;
-        ppr_flow_key_t ip_flow_key = {0};
-        rc = ppr_flowkey_from_hdr( &hdrs, &ip_flow_key, slotid);
+        wpr_flow_key_t ip_flow_key = {0};
+        rc = wpr_flowkey_from_hdr( &hdrs, &ip_flow_key, slotid);
         if(rc == 0){
             ip_flowkey_valid = true;
         }
 
         if(!ip_flowkey_valid && !l2_flowkey_valid){
-            PPR_LOG(PPR_LOG_DP, RTE_LOG_INFO, "No valid flow keys could be built for ACL lookup\n");
+            WPR_LOG(WPR_LOG_DP, RTE_LOG_INFO, "No valid flow keys could be built for ACL lookup\n");
         }
         //process acl lookup and populate mbuf priv area
         process_acl_lookup(thread_args->acl_runtime,
@@ -547,7 +547,7 @@ static int process_pcap(ppr_thread_args_t *thread_args, const char *filename) {
 
 /* Main loader thread */
 void *run_pcap_loader_thread(void *arg) {
-    ppr_thread_args_t *thread_args  = (ppr_thread_args_t *)arg;
+    wpr_thread_args_t *thread_args  = (wpr_thread_args_t *)arg;
     struct pcap_loader_ctl *ctl = thread_args->pcap_controller;
 
     pcap_storage_init(thread_args->pcap_storage);

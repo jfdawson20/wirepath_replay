@@ -1,223 +1,223 @@
-// ppr_acl_yaml.c
-#include "ppr_acl_yaml.h"
+// wpr_acl_yaml.c
+#include "wpr_acl_yaml.h"
 
 #include <string.h>
 #include <arpa/inet.h>
-#include "ppr_log.h"
-#include "ppr_actions.h"      // ppr_policy_action_t etc.
-#include "ppr_acl_db.h"
+#include "wpr_log.h"
+#include "wpr_actions.h"      // wpr_policy_action_t etc.
+#include "wpr_acl_db.h"
 
 /* -------- libcyaml schema -------- */
 
-/* Action mapping: ppr_yaml_acl_action_t */
-static const cyaml_schema_field_t ppr_yaml_acl_action_fields[] = {
+/* Action mapping: wpr_yaml_acl_action_t */
+static const cyaml_schema_field_t wpr_yaml_acl_action_fields[] = {
     CYAML_FIELD_STRING_PTR(
         "default_policy", CYAML_FLAG_POINTER,
-        ppr_yaml_acl_action_t, default_policy,
+        wpr_yaml_acl_action_t, default_policy,
         0, CYAML_UNLIMITED),
 
     CYAML_FIELD_END
 };
 
 /* IPv4 rule mapping */
-static const cyaml_schema_field_t ppr_yaml_acl_ip4_rule_fields[] = {
+static const cyaml_schema_field_t wpr_yaml_acl_ip4_rule_fields[] = {
     CYAML_FIELD_STRING_PTR("tenant_ids", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip4_rule_t, tenant_ids,
+                     wpr_yaml_acl_ip4_rule_t, tenant_ids,
                      0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("src", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                        ppr_yaml_acl_ip4_rule_t, src,
+                        wpr_yaml_acl_ip4_rule_t, src,
                         0, CYAML_UNLIMITED),
     CYAML_FIELD_UINT("src_prefix", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip4_rule_t, src_prefix),
+                     wpr_yaml_acl_ip4_rule_t, src_prefix),
 
     CYAML_FIELD_STRING_PTR("dst", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                        ppr_yaml_acl_ip4_rule_t, dst,
+                        wpr_yaml_acl_ip4_rule_t, dst,
                         0, CYAML_UNLIMITED),
     CYAML_FIELD_UINT("dst_prefix", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip4_rule_t, dst_prefix),
+                     wpr_yaml_acl_ip4_rule_t, dst_prefix),
 
     CYAML_FIELD_STRING_PTR("src_ports", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip4_rule_t, src_ports,  0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_ip4_rule_t, src_ports,  0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("dst_ports", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip4_rule_t, dst_ports,  0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_ip4_rule_t, dst_ports,  0, CYAML_UNLIMITED),
 
 
     CYAML_FIELD_STRING_PTR("proto", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                        ppr_yaml_acl_ip4_rule_t, proto,
+                        wpr_yaml_acl_ip4_rule_t, proto,
                         0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("in_ports", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip4_rule_t, in_ports, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_ip4_rule_t, in_ports, 0, CYAML_UNLIMITED),
 
 
     CYAML_FIELD_INT("priority", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-                    ppr_yaml_acl_ip4_rule_t, priority),
+                    wpr_yaml_acl_ip4_rule_t, priority),
 
     CYAML_FIELD_MAPPING("action", CYAML_FLAG_DEFAULT,
-                        ppr_yaml_acl_ip4_rule_t, action,
-                        ppr_yaml_acl_action_fields),
+                        wpr_yaml_acl_ip4_rule_t, action,
+                        wpr_yaml_acl_action_fields),
 
     CYAML_FIELD_END
 };
 
 /* IPv6 rule mapping */
-static const cyaml_schema_field_t ppr_yaml_acl_ip6_rule_fields[] = {
+static const cyaml_schema_field_t wpr_yaml_acl_ip6_rule_fields[] = {
     CYAML_FIELD_STRING_PTR("tenant_ids", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip6_rule_t, tenant_ids,
+                     wpr_yaml_acl_ip6_rule_t, tenant_ids,
                      0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("src", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                        ppr_yaml_acl_ip6_rule_t, src,
+                        wpr_yaml_acl_ip6_rule_t, src,
                         0, CYAML_UNLIMITED),
     CYAML_FIELD_UINT("src_prefix", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip6_rule_t, src_prefix),
+                     wpr_yaml_acl_ip6_rule_t, src_prefix),
 
     CYAML_FIELD_STRING_PTR("dst", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                        ppr_yaml_acl_ip6_rule_t, dst,
+                        wpr_yaml_acl_ip6_rule_t, dst,
                         0, CYAML_UNLIMITED),
     CYAML_FIELD_UINT("dst_prefix", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip6_rule_t, dst_prefix),
+                     wpr_yaml_acl_ip6_rule_t, dst_prefix),
 
     CYAML_FIELD_STRING_PTR("src_ports", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip6_rule_t, src_ports, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_ip6_rule_t, src_ports, 0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("dst_ports", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip6_rule_t, dst_ports, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_ip6_rule_t, dst_ports, 0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("proto", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                        ppr_yaml_acl_ip6_rule_t, proto,
+                        wpr_yaml_acl_ip6_rule_t, proto,
                         0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("in_ports", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_ip6_rule_t, in_ports, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_ip6_rule_t, in_ports, 0, CYAML_UNLIMITED),
 
 
     CYAML_FIELD_INT("priority", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-                    ppr_yaml_acl_ip6_rule_t, priority),
+                    wpr_yaml_acl_ip6_rule_t, priority),
 
     CYAML_FIELD_MAPPING("action", CYAML_FLAG_DEFAULT,
-                        ppr_yaml_acl_ip6_rule_t, action,
-                        ppr_yaml_acl_action_fields),
+                        wpr_yaml_acl_ip6_rule_t, action,
+                        wpr_yaml_acl_action_fields),
 
     CYAML_FIELD_END
 };
 
 /* L2 rule mapping */
-static const cyaml_schema_field_t ppr_yaml_acl_l2_rule_fields[] = {
+static const cyaml_schema_field_t wpr_yaml_acl_l2_rule_fields[] = {
     CYAML_FIELD_STRING_PTR("tenant_ids", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_l2_rule_t, tenant_ids, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_l2_rule_t, tenant_ids, 0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("in_ports", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_l2_rule_t, in_ports, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_l2_rule_t, in_ports, 0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("outer_vlans", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_l2_rule_t, outer_vlans, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_l2_rule_t, outer_vlans, 0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("inner_vlans", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                     ppr_yaml_acl_l2_rule_t, inner_vlans, 0, CYAML_UNLIMITED),
+                     wpr_yaml_acl_l2_rule_t, inner_vlans, 0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("ether_type", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                           ppr_yaml_acl_l2_rule_t, ether_type,
+                           wpr_yaml_acl_l2_rule_t, ether_type,
                            0, CYAML_UNLIMITED),
                            
 
     CYAML_FIELD_STRING_PTR("src_mac", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                           ppr_yaml_acl_l2_rule_t, src_mac,
+                           wpr_yaml_acl_l2_rule_t, src_mac,
                            0, CYAML_UNLIMITED),
 
     CYAML_FIELD_STRING_PTR("dst_mac", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-                           ppr_yaml_acl_l2_rule_t, dst_mac,
+                           wpr_yaml_acl_l2_rule_t, dst_mac,
                            0, CYAML_UNLIMITED),
 
     CYAML_FIELD_INT("priority", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-                    ppr_yaml_acl_l2_rule_t, priority),
+                    wpr_yaml_acl_l2_rule_t, priority),
 
     CYAML_FIELD_MAPPING("action", CYAML_FLAG_DEFAULT,
-                        ppr_yaml_acl_l2_rule_t, action,
-                        ppr_yaml_acl_action_fields),
+                        wpr_yaml_acl_l2_rule_t, action,
+                        wpr_yaml_acl_action_fields),
 
     CYAML_FIELD_END
 };
 
 /* IPv4 rule schema: sequence element type */
-static const cyaml_schema_value_t ppr_yaml_acl_ip4_rule_schema = {
+static const cyaml_schema_value_t wpr_yaml_acl_ip4_rule_schema = {
     CYAML_VALUE_MAPPING(
         CYAML_FLAG_DEFAULT,           // <-- FIXED
-        ppr_yaml_acl_ip4_rule_t,
-        ppr_yaml_acl_ip4_rule_fields),
+        wpr_yaml_acl_ip4_rule_t,
+        wpr_yaml_acl_ip4_rule_fields),
 };
 
 /* IPv6 rule schema: sequence element type */
-static const cyaml_schema_value_t ppr_yaml_acl_ip6_rule_schema = {
+static const cyaml_schema_value_t wpr_yaml_acl_ip6_rule_schema = {
     CYAML_VALUE_MAPPING(
         CYAML_FLAG_DEFAULT,           // <-- FIXED
-        ppr_yaml_acl_ip6_rule_t,
-        ppr_yaml_acl_ip6_rule_fields),
+        wpr_yaml_acl_ip6_rule_t,
+        wpr_yaml_acl_ip6_rule_fields),
 };
 
 /* L2 rule schema: sequence element type */
-static const cyaml_schema_value_t ppr_yaml_acl_l2_rule_schema = {
+static const cyaml_schema_value_t wpr_yaml_acl_l2_rule_schema = {
     CYAML_VALUE_MAPPING(
         CYAML_FLAG_DEFAULT,           // <-- FIXED
-        ppr_yaml_acl_l2_rule_t,
-        ppr_yaml_acl_l2_rule_fields),
+        wpr_yaml_acl_l2_rule_t,
+        wpr_yaml_acl_l2_rule_fields),
 };
 
 /* rules: container of sequences */
-static const cyaml_schema_field_t ppr_yaml_acl_rules_fields[] = {
+static const cyaml_schema_field_t wpr_yaml_acl_rules_fields[] = {
     CYAML_FIELD_SEQUENCE(
         "ip4", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-        ppr_yaml_acl_rules_t, ip4,
-        &ppr_yaml_acl_ip4_rule_schema,
+        wpr_yaml_acl_rules_t, ip4,
+        &wpr_yaml_acl_ip4_rule_schema,
         0, CYAML_UNLIMITED),
 
     CYAML_FIELD_SEQUENCE(
         "ip6", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-        ppr_yaml_acl_rules_t, ip6,
-        &ppr_yaml_acl_ip6_rule_schema,
+        wpr_yaml_acl_rules_t, ip6,
+        &wpr_yaml_acl_ip6_rule_schema,
         0, CYAML_UNLIMITED),
 
     CYAML_FIELD_SEQUENCE(
         "l2", CYAML_FLAG_POINTER | CYAML_FLAG_OPTIONAL,
-        ppr_yaml_acl_rules_t, l2,
-        &ppr_yaml_acl_l2_rule_schema,
+        wpr_yaml_acl_rules_t, l2,
+        &wpr_yaml_acl_l2_rule_schema,
         0, CYAML_UNLIMITED),
 
     CYAML_FIELD_END
 };
 
-static const cyaml_schema_field_t ppr_yaml_template_fields[] = {
+static const cyaml_schema_field_t wpr_yaml_template_fields[] = {
     CYAML_FIELD_STRING_PTR(
         "pcap_filepath", CYAML_FLAG_POINTER ,
-        ppr_yaml_template_t, pcap_filepath,
+        wpr_yaml_template_t, pcap_filepath,
         0, CYAML_UNLIMITED),
 
     CYAML_FIELD_END
 };
 
 
-static const cyaml_schema_field_t ppr_yaml_acl_root_fields[] = {
+static const cyaml_schema_field_t wpr_yaml_acl_root_fields[] = {
     CYAML_FIELD_MAPPING(
         "template", CYAML_FLAG_DEFAULT,
-        ppr_yaml_acl_root_t, template,
-        ppr_yaml_template_fields),
+        wpr_yaml_acl_root_t, template,
+        wpr_yaml_template_fields),
 
     CYAML_FIELD_MAPPING(
         "acl_rules", CYAML_FLAG_DEFAULT | CYAML_FLAG_OPTIONAL,
-        ppr_yaml_acl_root_t, rules,
-        ppr_yaml_acl_rules_fields),
+        wpr_yaml_acl_root_t, rules,
+        wpr_yaml_acl_rules_fields),
 
     CYAML_FIELD_END
 };
 
-/* top-level schema: pointer, because we pass ppr_yaml_acl_root_t ** to cyaml_load_file */
-static const cyaml_schema_value_t ppr_yaml_acl_root_schema = {
+/* top-level schema: pointer, because we pass wpr_yaml_acl_root_t ** to cyaml_load_file */
+static const cyaml_schema_value_t wpr_yaml_acl_root_schema = {
     CYAML_VALUE_MAPPING(
         CYAML_FLAG_POINTER,
-        ppr_yaml_acl_root_t,
-        ppr_yaml_acl_root_fields),
+        wpr_yaml_acl_root_t,
+        wpr_yaml_acl_root_fields),
 };
 
 /* --- small helpers reused from your JSON code --- */
@@ -260,7 +260,7 @@ static int parse_mac(const char *s, struct rte_ether_addr *mac)
 }
 
 //<TODO> this duplicates logic in the main yaml parser, combine?
-static ppr_flow_action_kind_t policy_from_str(const char *s)
+static wpr_flow_action_kind_t policy_from_str(const char *s)
 {
     if (!s) return FLOW_ACT_DROP;
 
@@ -280,7 +280,7 @@ static ppr_flow_action_kind_t policy_from_str(const char *s)
 }
 
 //parse a list of port names comma separated, return global index range
-static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, uint16_t *lo_out, uint16_t *hi_out)
+static int parse_input_port_list(const char *s ,wpr_ports_t *global_port_list, uint16_t *lo_out, uint16_t *hi_out)
 {
     /* Missing or empty -> wildcard [0,65535] */
     if (!s || !*s ||
@@ -300,8 +300,8 @@ static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, u
         if (sscanf(s, "%63[^:]:%63s", lo, hi) != 2)
             return -EINVAL;
 
-        ppr_port_entry_t *port_lo = ppr_find_port_byname(global_port_list, lo);
-        ppr_port_entry_t *port_hi = ppr_find_port_byname(global_port_list, hi);
+        wpr_port_entry_t *port_lo = wpr_find_port_byname(global_port_list, lo);
+        wpr_port_entry_t *port_hi = wpr_find_port_byname(global_port_list, hi);
         if (!port_lo || !port_hi){
             return -EINVAL;
         }
@@ -315,8 +315,8 @@ static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, u
         if (sscanf(s, "%63[^-]-%63s", lo, hi) != 2)
             return -EINVAL;
 
-        ppr_port_entry_t *port_lo = ppr_find_port_byname(global_port_list, lo);
-        ppr_port_entry_t *port_hi = ppr_find_port_byname(global_port_list, hi);
+        wpr_port_entry_t *port_lo = wpr_find_port_byname(global_port_list, lo);
+        wpr_port_entry_t *port_hi = wpr_find_port_byname(global_port_list, hi);
         if (!port_lo || !port_hi){
             return -EINVAL;
         }
@@ -329,7 +329,7 @@ static int parse_input_port_list(const char *s ,ppr_ports_t *global_port_list, u
     if (sscanf(s, "%63s", lo) != 1)
         return -EINVAL;
 
-    ppr_port_entry_t *port_lo = ppr_find_port_byname(global_port_list, lo);
+    wpr_port_entry_t *port_lo = wpr_find_port_byname(global_port_list, lo);
     if (!port_lo){
         return -EINVAL;
     }    
@@ -448,9 +448,9 @@ static int parse_tenant_range(const char *s, uint32_t *lo_out, uint32_t *hi_out)
 * @param out Output internal action structure
 * @return 0 on success, negative errno on failure
 **/
-static int yaml_action_to_policy(const ppr_yaml_acl_action_t *ya,
-                                 ppr_ports_t *global_port_list,
-                                 ppr_policy_action_t *out)
+static int yaml_action_to_policy(const wpr_yaml_acl_action_t *ya,
+                                 wpr_ports_t *global_port_list,
+                                 wpr_policy_action_t *out)
 {
     (void)global_port_list;
 
@@ -473,9 +473,9 @@ static int yaml_action_to_policy(const ppr_yaml_acl_action_t *ya,
 * @param out Output internal IPv4 rule configuration structure
 * @return 0 on success, negative errno on failure
 **/
-static int yaml_ip4_to_cfg(const ppr_yaml_acl_ip4_rule_t *y,
-                           ppr_ports_t *global_port_list,
-                           ppr_acl_ip4_rule_cfg_t *out)
+static int yaml_ip4_to_cfg(const wpr_yaml_acl_ip4_rule_t *y,
+                           wpr_ports_t *global_port_list,
+                           wpr_acl_ip4_rule_cfg_t *out)
 {
     memset(out, 0, sizeof(*out));
     
@@ -566,9 +566,9 @@ static int yaml_ip4_to_cfg(const ppr_yaml_acl_ip4_rule_t *y,
 * @param out Output internal IPv6 rule configuration structure
 * @return 0 on success, negative errno on failure
 **/
-static int yaml_ip6_to_cfg(const ppr_yaml_acl_ip6_rule_t *y,
-                           ppr_ports_t *global_port_list,
-                           ppr_acl_ip6_rule_cfg_t *out)
+static int yaml_ip6_to_cfg(const wpr_yaml_acl_ip6_rule_t *y,
+                           wpr_ports_t *global_port_list,
+                           wpr_acl_ip6_rule_cfg_t *out)
 {
     memset(out, 0, sizeof(*out));
 
@@ -661,9 +661,9 @@ static int yaml_ip6_to_cfg(const ppr_yaml_acl_ip6_rule_t *y,
 * @param out Output internal L2 rule configuration structure
 * @return 0 on success, negative errno on failure   
 **/
-static int yaml_l2_to_cfg(const ppr_yaml_acl_l2_rule_t *y,
-                          ppr_ports_t *global_port_list,
-                          ppr_acl_l2_rule_cfg_t *out)
+static int yaml_l2_to_cfg(const wpr_yaml_acl_l2_rule_t *y,
+                          wpr_ports_t *global_port_list,
+                          wpr_acl_l2_rule_cfg_t *out)
 {
 
     memset(out, 0, sizeof(*out));
@@ -748,9 +748,9 @@ static int yaml_l2_to_cfg(const ppr_yaml_acl_l2_rule_t *y,
 }
 
 
-int ppr_acl_load_startup_file(const char *path,
-                              ppr_acl_rule_db_t *db,
-                              ppr_ports_t *global_port_list,
+int wpr_acl_load_startup_file(const char *path,
+                              wpr_acl_rule_db_t *db,
+                              wpr_ports_t *global_port_list,
                               char **pcap_template_out)
 
 {
@@ -758,7 +758,7 @@ int ppr_acl_load_startup_file(const char *path,
         return 0; // nothing to do
 
     cyaml_err_t err;
-    ppr_yaml_acl_root_t *root = NULL;
+    wpr_yaml_acl_root_t *root = NULL;
 
     static const cyaml_config_t cyaml_cfg = {
         .log_fn = NULL,
@@ -768,10 +768,10 @@ int ppr_acl_load_startup_file(const char *path,
     };
 
     err = cyaml_load_file(path, &cyaml_cfg,
-                          &ppr_yaml_acl_root_schema,
+                          &wpr_yaml_acl_root_schema,
                           (void **)&root, NULL);
     if (err != CYAML_OK) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR,
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR,
                 "ACL YAML: failed to load '%s': %s\n",
                 path, cyaml_strerror(err));
         return -EINVAL;
@@ -781,10 +781,10 @@ int ppr_acl_load_startup_file(const char *path,
 
     /* Apply IPv4 rules */
     for (uint32_t i = 0; i < root->rules.ip4_count; i++) {
-        ppr_acl_ip4_rule_cfg_t cfg;
-        const ppr_yaml_acl_ip4_rule_t *y = &root->rules.ip4[i];
+        wpr_acl_ip4_rule_cfg_t cfg;
+        const wpr_yaml_acl_ip4_rule_t *y = &root->rules.ip4[i];
 
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_INFO,
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_INFO,
                 "ACL YAML: processing ip4 rule[%u]: tenant=%s src=%s/%u dst=%s/%u "
                 "sports=[%s] dports=[%s] in_ports=[%s] priority=%d\n",
                 i,
@@ -796,46 +796,46 @@ int ppr_acl_load_startup_file(const char *path,
 
         rc = yaml_ip4_to_cfg(y, global_port_list, &cfg);
         if (rc < 0) {
-            PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR,
+            WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR,
                     "ACL YAML: yaml_ip4_to_cfg failed for rule[%u]: rc=%d\n", i, rc);
             goto out;
         }
 
-        rc = ppr_acl_db_add_ip4_rule(db, &cfg, NULL);
+        rc = wpr_acl_db_add_ip4_rule(db, &cfg, NULL);
         if (rc < 0) {
-            PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR,
-                    "ACL YAML: ppr_acl_db_add_ip4_rule failed for rule[%u]: rc=%d\n", i, rc);
+            WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR,
+                    "ACL YAML: wpr_acl_db_add_ip4_rule failed for rule[%u]: rc=%d\n", i, rc);
             goto out;
         }
     }
 
     /* Apply IPv6 rules */
     for (uint32_t i = 0; i < root->rules.ip6_count; i++) {
-        ppr_acl_ip6_rule_cfg_t cfg;
+        wpr_acl_ip6_rule_cfg_t cfg;
         rc = yaml_ip6_to_cfg(&root->rules.ip6[i],
                              global_port_list, &cfg);
         if (rc < 0)
             goto out;
 
-        rc = ppr_acl_db_add_ip6_rule(db, &cfg, NULL);
+        rc = wpr_acl_db_add_ip6_rule(db, &cfg, NULL);
         if (rc < 0)
             goto out;
     }
 
     /* Apply L2 rules */
     for (uint32_t i = 0; i < root->rules.l2_count; i++) {
-        ppr_acl_l2_rule_cfg_t cfg;
+        wpr_acl_l2_rule_cfg_t cfg;
         rc = yaml_l2_to_cfg(&root->rules.l2[i],
                             global_port_list, &cfg);
         if (rc < 0)
             goto out;
 
-        rc = ppr_acl_db_add_l2_rule(db, &cfg, NULL);
+        rc = wpr_acl_db_add_l2_rule(db, &cfg, NULL);
         if (rc < 0)
             goto out;
     }
 
-    PPR_LOG(PPR_LOG_RPC, RTE_LOG_INFO,
+    WPR_LOG(WPR_LOG_RPC, RTE_LOG_INFO,
             "ACL YAML: loaded %u ip4, %u ip6, %u l2 rules from '%s'\n",
             root->rules.ip4_count,
             root->rules.ip6_count,
@@ -851,14 +851,14 @@ int ppr_acl_load_startup_file(const char *path,
     }
 
 out:
-    cyaml_free(&cyaml_cfg, &ppr_yaml_acl_root_schema, root, 0);
+    cyaml_free(&cyaml_cfg, &wpr_yaml_acl_root_schema, root, 0);
 
     if (rc < 0) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR,
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR,
                 "ACL YAML: error applying rules from '%s'\n", path);
         return rc;
     }
 
     return 0;
 }
-// ppr_acl_rpc.c
+// wpr_acl_rpc.c

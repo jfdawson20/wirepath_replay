@@ -18,11 +18,11 @@ The main thread runs in a infinite loop at a poll frequency specified at launch 
 #include <stdio.h> 
 #include <unistd.h>
 
-#include "ppr_stats.h"
-#include "ppr_app_defines.h"
-#include "ppr_time.h"
-#include "ppr_log.h"
-#include "ppr_ports.h"
+#include "wpr_stats.h"
+#include "wpr_app_defines.h"
+#include "wpr_time.h"
+#include "wpr_log.h"
+#include "wpr_ports.h"
 
 /* function for calculating time differences of timespec structs*/
 static double timespec_diff_sec(struct timespec *a, struct timespec *b) {
@@ -43,31 +43,31 @@ static inline uint64_t safe_diff_u64(uint64_t cur, uint64_t prev)
 /* Collect memory statistics for all configured memory pools used by the application and update shared 
    stats memory structures 
 */
-static int update_memstats(ppr_thread_args_t *thread_args){
+static int update_memstats(wpr_thread_args_t *thread_args){
     (void)thread_args;
-    //ppr_stats_all_t *stats_memory = thread_args->global_stats;
+    //wpr_stats_all_t *stats_memory = thread_args->global_stats;
 
     
     return 0;
 }
 
 /* Collect port statistics and compute rates. Function gathers DPDK xstats and computes the rate for each statistic based on the poll frequency */
-static int update_portstats(ppr_thread_args_t *thread_args){
-    ppr_ports_t *global_port_list = thread_args->global_port_list;
+static int update_portstats(wpr_thread_args_t *thread_args){
+    wpr_ports_t *global_port_list = thread_args->global_port_list;
 
     for (unsigned int i =0; i < global_port_list->num_ports; i++){
         if(!global_port_list->ports[i].name){
-            PPR_LOG(PPR_LOG_STATS, RTE_LOG_ERR, "Port name is NULL for port index %u\n", i);
+            WPR_LOG(WPR_LOG_STATS, RTE_LOG_ERR, "Port name is NULL for port index %u\n", i);
             continue;
         }
 
-        ppr_port_entry_t *port_entry = &global_port_list->ports[i];
+        wpr_port_entry_t *port_entry = &global_port_list->ports[i];
         if(!port_entry){
-            PPR_LOG(PPR_LOG_STATS, RTE_LOG_ERR, "Port entry is NULL for port index %u\n", i);
+            WPR_LOG(WPR_LOG_STATS, RTE_LOG_ERR, "Port entry is NULL for port index %u\n", i);
             continue;
         }
 
-        if(port_entry->kind == PPR_PORT_TYPE_DROP){
+        if(port_entry->kind == WPR_PORT_TYPE_DROP){
             continue;
         }
         //lock mutex 
@@ -79,7 +79,7 @@ static int update_portstats(ppr_thread_args_t *thread_args){
         double time_delta = timespec_diff_sec(&port_entry->stats.prev_ts,&port_entry->stats.curr_ts);  
 
         //update stats for this port
-        if (port_entry->kind == PPR_PORT_TYPE_RING){
+        if (port_entry->kind == WPR_PORT_TYPE_RING){
             //not used in this app
             continue;
         }
@@ -124,8 +124,8 @@ static int update_portstats(ppr_thread_args_t *thread_args){
     return 0;
 }
 
-static int ppr_update_worker_stats(ppr_thread_args_t *thread_args){
-    ppr_stats_all_t *stats_memory = thread_args->global_stats;
+static int wpr_update_worker_stats(wpr_thread_args_t *thread_args){
+    wpr_stats_all_t *stats_memory = thread_args->global_stats;
     
     /* update and process port stats */
     pthread_mutex_lock(&stats_memory->worker_stats->lock);
@@ -136,7 +136,7 @@ static int ppr_update_worker_stats(ppr_thread_args_t *thread_args){
     //capture current time
     clock_gettime(CLOCK_MONOTONIC, &stats_memory->worker_stats->curr_ts); 
     
-    ppr_single_worker_stat_seq_t *current;
+    wpr_single_worker_stat_seq_t *current;
     for(unsigned int i =0; i< num_workers; i++){
         //get current stats 
         current = &stats_memory->worker_stats->current_worker_stats[i];
@@ -144,7 +144,7 @@ static int ppr_update_worker_stats(ppr_thread_args_t *thread_args){
         double time_delta = timespec_diff_sec(&stats_memory->worker_stats->prev_ts,&stats_memory->worker_stats->curr_ts);
 
         //compute rates
-        ppr_single_worker_stat_seq_t *rates = &stats_memory->worker_stats->rates_worker_stats[i];
+        wpr_single_worker_stat_seq_t *rates = &stats_memory->worker_stats->rates_worker_stats[i];
 
         uint64_t diff_rx_pkts           = safe_diff_u64(current->rx_packets,         stats_memory->worker_stats->prev_worker_stats[i].rx_packets);
         uint64_t diff_rx_bytes          = safe_diff_u64(current->rx_bytes,           stats_memory->worker_stats->prev_worker_stats[i].rx_bytes);
@@ -186,9 +186,9 @@ static int ppr_update_worker_stats(ppr_thread_args_t *thread_args){
 
 
 /* Main stats monitoring and publishing thread */
-void *run_ppr_stats_thread(void *arg) {
+void *run_wpr_stats_thread(void *arg) {
     //parse thread args 
-    ppr_thread_args_t *thread_args  = (ppr_thread_args_t *)arg;   
+    wpr_thread_args_t *thread_args  = (wpr_thread_args_t *)arg;   
 
     //setup poll rate variables
     const uint64_t hz = rte_get_timer_hz();
@@ -218,10 +218,10 @@ void *run_ppr_stats_thread(void *arg) {
             update_memstats(thread_args);
 
             //3) update worker stats 
-            //ppr_update_worker_stats(thread_args);
+            //wpr_update_worker_stats(thread_args);
 
             //4) update ACL stats 
-            ppr_acl_stats_accumulator(thread_args->acl_runtime);
+            wpr_acl_stats_accumulator(thread_args->acl_runtime);
         }
 
         // Not time yet: compute remaining time and sleep
@@ -241,6 +241,6 @@ void *run_ppr_stats_thread(void *arg) {
     
     }
 
-    PPR_LOG(PPR_LOG_STATS, RTE_LOG_INFO, "\n\tStats Thread - Thread Exiting\n");
+    WPR_LOG(WPR_LOG_STATS, RTE_LOG_INFO, "\n\tStats Thread - Thread Exiting\n");
     return (void*)0;
 }

@@ -1,12 +1,12 @@
-#ifndef PPR_FLOWKEY_H
-#define PPR_FLOWKEY_H
+#ifndef WPR_FLOWKEY_H
+#define WPR_FLOWKEY_H
 
-#include "ppr_header_extract.h"
+#include "wpr_header_extract.h"
 
 /* -------------------------------------------- Flow Key Structs ------------------------------------------------- */
 
 //L2 flow key for L2 (Non IP) Flow Tables
-typedef struct ppr_l2_flow_key {
+typedef struct wpr_l2_flow_key {
     uint32_t tenant_id;   // same concept as IP table
 
     uint16_t in_port;     // ingress port id
@@ -18,51 +18,51 @@ typedef struct ppr_l2_flow_key {
     struct rte_ether_addr dst;
 
     uint32_t hash;        // precomputed signature if you want it here too
-} ppr_l2_flow_key_t __rte_aligned(8);
+} wpr_l2_flow_key_t __rte_aligned(8);
 
 
 //ipv4 flow key 
-typedef struct ppr_flow_key_v4{
+typedef struct wpr_flow_key_v4{
     uint32_t src_ip;   // be32
     uint32_t dst_ip;   // be32
     uint16_t src_port; // be16
     uint16_t dst_port; // be16
     uint8_t  proto;    // IPPROTO_*
     uint8_t  _pad[3];  // keep alignment (explicit)
-} ppr_flow_key_v4_t __rte_aligned(8);
+} wpr_flow_key_v4_t __rte_aligned(8);
 
 
 //ipv6 flow key
-typedef struct ppr_flow_key_v6{
+typedef struct wpr_flow_key_v6{
     uint8_t  src_ip[16]; // raw bytes (network order)
     uint8_t  dst_ip[16]; // raw bytes (network order)
     uint16_t src_port;   // be16
     uint16_t dst_port;   // be16 
     uint8_t  proto;      // IPPROTO_*
     uint8_t  _pad[1];    // keep alignment
-} ppr_flow_key_v6_t __rte_aligned(8);
+} wpr_flow_key_v6_t __rte_aligned(8);
 
 
 // Unify v4/v6: we store family + union
 // Family is AF_INET / AF_INET6 
-typedef struct ppr_flow_key{
+typedef struct wpr_flow_key{
     uint32_t tenant_id;  
     uint8_t  family;     
     uint8_t  _pad0[3];
 
     union {
-        ppr_flow_key_v4_t v4;
-        ppr_flow_key_v6_t v6;
+        wpr_flow_key_v4_t v4;
+        wpr_flow_key_v6_t v6;
     } ip;
 
     uint32_t hash; 
     uint32_t _pad1;
-} ppr_flow_key_t __rte_aligned(8);
+} wpr_flow_key_t __rte_aligned(8);
 
 //calculate max key size 
-#define PPR_FT_MAX_KEY_SIZE \
-    (sizeof(ppr_flow_key_t) > sizeof(ppr_l2_flow_key_t) ? \
-        sizeof(ppr_flow_key_t) : sizeof(ppr_l2_flow_key_t))
+#define WPR_FT_MAX_KEY_SIZE \
+    (sizeof(wpr_flow_key_t) > sizeof(wpr_l2_flow_key_t) ? \
+        sizeof(wpr_flow_key_t) : sizeof(wpr_l2_flow_key_t))
 
 
 
@@ -78,11 +78,11 @@ typedef struct ppr_flow_key{
 *   0 on success, negative errno on failure 
 **/
 static inline int
-ppr_flowkey_from_hdr(const ppr_hdrs_t *hdrs,
-                     ppr_flow_key_t *key,
+wpr_flowkey_from_hdr(const wpr_hdrs_t *hdrs,
+                     wpr_flow_key_t *key,
                      uint32_t pcap_slot_id)
 {
-    if (hdrs->l3_type == PPR_L3_NONE)
+    if (hdrs->l3_type == WPR_L3_NONE)
         return -1;
 
     // Zero the key – we’ll fill every field we care about.
@@ -92,7 +92,7 @@ ppr_flowkey_from_hdr(const ppr_hdrs_t *hdrs,
     uint32_t tenant_id = pcap_slot_id;
 
     /* ---------- IPv4 path (no IPv6 memcpy at all) ---------- */
-    if (hdrs->l3_type == PPR_L3_IPV4) {
+    if (hdrs->l3_type == WPR_L3_IPV4) {
         uint32_t src_ip = hdrs->outer_ipv4_src;
         uint32_t dst_ip = hdrs->outer_ipv4_dst;
         uint16_t src_port = hdrs->outer_l4_src_port;
@@ -112,7 +112,7 @@ ppr_flowkey_from_hdr(const ppr_hdrs_t *hdrs,
     }
 
     /* ---------- IPv6 path ---------- */
-    if (hdrs->l3_type == PPR_L3_IPV6) {
+    if (hdrs->l3_type == WPR_L3_IPV6) {
         const uint8_t *src_ip = hdrs->outer_ipv6_src;
         const uint8_t *dst_ip = hdrs->outer_ipv6_dst;
         uint16_t src_port     = hdrs->outer_l4_src_port;
@@ -150,8 +150,8 @@ compute_hash:
 * @return
 *   0 on success, negative errno on failure
 **/
-static inline int ppr_l2_flowkey_from_hdr(const ppr_hdrs_t *hdrs,
-                                          ppr_l2_flow_key_t *key,
+static inline int wpr_l2_flowkey_from_hdr(const wpr_hdrs_t *hdrs,
+                                          wpr_l2_flow_key_t *key,
                                           uint32_t pcap_slot_id)
 {
 
@@ -176,4 +176,4 @@ static inline int ppr_l2_flowkey_from_hdr(const ppr_hdrs_t *hdrs,
     return 0;
 }
 
-#endif /* PPR_FLOWKEY_H */
+#endif /* WPR_FLOWKEY_H */

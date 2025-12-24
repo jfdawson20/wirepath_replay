@@ -1,15 +1,15 @@
 
-#include "ppr_port_rpc.h"
-#include "ppr_tx_worker.h"
-#include "ppr_time.h"
+#include "wpr_port_rpc.h"
+#include "wpr_tx_worker.h"
+#include "wpr_time.h"
 
-int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_get_port_list(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     //silence unused param warnings
     (void)args;
-    ppr_ports_t *port_list = thread_args->global_port_list;
+    wpr_ports_t *port_list = thread_args->global_port_list;
     json_t *portlist = json_object();
 
-    PPR_LOG(PPR_LOG_PORTS, RTE_LOG_DEBUG, "\n Dumping Global Port List: num_ports=%u\n", port_list->num_ports);
+    WPR_LOG(WPR_LOG_PORTS, RTE_LOG_DEBUG, "\n Dumping Global Port List: num_ports=%u\n", port_list->num_ports);
     for (unsigned int i = 0; i < port_list->num_ports; i++) {
         json_t *portentry = json_object();
         json_t *rx_queue_arr = json_array();
@@ -17,10 +17,10 @@ int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *t
         int rc = 0;
 
         char direction[32];
-        if (port_list->ports[i].dir == PPR_PORT_RX){
+        if (port_list->ports[i].dir == WPR_PORT_RX){
             snprintf(direction, sizeof(direction), "RX");
         }
-        else if (port_list->ports[i].dir == PPR_PORT_TX){
+        else if (port_list->ports[i].dir == WPR_PORT_TX){
             snprintf(direction, sizeof(direction), "TX");
         }
         else {
@@ -40,26 +40,26 @@ int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *t
         rc += json_object_set_new(portentry, "total_tx_queues", json_integer(total_tx_queues));
         rc += json_object_set_new(portentry, "dir", json_string(direction));
 
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_DEBUG, "\t\tRX Queue Assignments: ");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_DEBUG, "\t\tRX Queue Assignments: ");
         for (unsigned int q=0; q < port_list->ports[i].total_rx_queues; q++){
             json_t *rx_queue_entry = json_object();
             rc += json_object_set_new(rx_queue_entry, "queue_index", json_integer(q));
             rc += json_object_set_new(rx_queue_entry, "assigned_worker_core", json_integer(port_list->ports[i].rx_queue_assignments[q]));
             rc += json_array_append_new(rx_queue_arr,rx_queue_entry);
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_DEBUG, "%u ", port_list->ports[i].rx_queue_assignments[q]);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_DEBUG, "%u ", port_list->ports[i].rx_queue_assignments[q]);
         }
         
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_DEBUG, "\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_DEBUG, "\n");
         
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_DEBUG, "\t\tTX Queue Assignments: ");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_DEBUG, "\t\tTX Queue Assignments: ");
         for (unsigned int q=0; q < port_list->ports[i].total_tx_queues; q++){
             json_t *tx_queue_entry = json_object();
             rc += json_object_set_new(tx_queue_entry, "queue_index", json_integer(q));
             rc += json_object_set_new(tx_queue_entry, "assigned_worker_core", json_integer(port_list->ports[i].tx_queue_assignments[q]));
             rc += json_array_append_new(tx_queue_arr,tx_queue_entry);
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_DEBUG, "%u ", port_list->ports[i].tx_queue_assignments[q]);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_DEBUG, "%u ", port_list->ports[i].tx_queue_assignments[q]);
         }
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_DEBUG, "\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_DEBUG, "\n");
         rc += json_object_set_new(portentry, "rx_queues", rx_queue_arr);
         rc += json_object_set_new(portentry, "tx_queues", tx_queue_arr);
         rc += json_object_set_new(portlist,name, portentry);
@@ -87,9 +87,9 @@ int ppr_cmd_get_port_list(json_t *reply_root, json_t *args, ppr_thread_args_t *t
 *   - 0 on success
 *   - -EINVAL if input parameters are invalid
 **/
-int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_port_tx_ctl(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
 
-    ppr_ports_t *global_port_list = thread_args->global_port_list;
+    wpr_ports_t *global_port_list = thread_args->global_port_list;
 
     //extract port name from command
     json_t *jportname = json_object_get(args, "port");
@@ -100,7 +100,7 @@ int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_
     const char *portname = json_string_value (jportname);
 
     //validate port entry exists
-    ppr_port_entry_t *port_entry = ppr_find_port_byname(global_port_list, portname);
+    wpr_port_entry_t *port_entry = wpr_find_port_byname(global_port_list, portname);
     if (!port_entry) {
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
@@ -117,7 +117,7 @@ int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_
     uint16_t global_port_index = port_entry->global_port_index;
 
     //get global port stream config for this port
-    ppr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
+    wpr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
     if(port_streams == NULL){
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
@@ -126,19 +126,19 @@ int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_
     //verify stream has a valid slot assignment for enable only
     uint32_t slot_id = atomic_load_explicit(&port_streams[global_port_index].slot_id, memory_order_acquire);
     if (slot_id == UINT32_MAX && strcmp(cmd_str, "enable") == 0){
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: Port %s has no valid assigned pcap slot, cannot enable TX\n", portname);
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: Port %s has no valid assigned pcap slot, cannot enable TX\n", portname);
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
 
     //process command 
     if (strcmp(cmd_str, "enable") == 0){
-        atomic_store_explicit(&port_streams[global_port_index].global_start_ns, ppr_now_ns(), memory_order_release);
+        atomic_store_explicit(&port_streams[global_port_index].global_start_ns, wpr_now_ns(), memory_order_release);
         atomic_store_explicit(&port_entry->tx_enabled, true, memory_order_release); 
     }
     else if (strcmp(cmd_str, "disable") == 0){
         atomic_store_explicit(&port_entry->tx_enabled, false, memory_order_release); 
-        atomic_store_explicit(&port_streams[global_port_index].global_start_ns, ppr_now_ns(), memory_order_release);
+        atomic_store_explicit(&port_streams[global_port_index].global_start_ns, wpr_now_ns(), memory_order_release);
     }
     else {
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
@@ -161,29 +161,29 @@ int ppr_port_tx_ctl(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_
 * @param result
 *   Pointer to integer to store result code (0=success, negative=error).    
 **/
-int ppr_set_port_stream_vcs(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args)
+int wpr_set_port_stream_vcs(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args)
 {
     if (!reply_root || !args || !thread_args || !thread_args->global_port_list) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to ppr_set_port_stream_vcs\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: invalid arguments to wpr_set_port_stream_vcs\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
 
-    ppr_ports_t *port_list = thread_args->global_port_list;
+    wpr_ports_t *port_list = thread_args->global_port_list;
 
     //extract port number from command
     json_t *jportname = json_object_get(args, "port");
     if (!jportname) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'port' argument in ppr_set_port_stream_vcs\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'port' argument in wpr_set_port_stream_vcs\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
     const char *portname = json_string_value (jportname);
 
     //validate port entry exists
-    ppr_port_entry_t *port_entry = ppr_find_port_byname(port_list, portname);
+    wpr_port_entry_t *port_entry = wpr_find_port_byname(port_list, portname);
     if (!port_entry) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: could not find port entry for port name '%s'\n", portname);
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: could not find port entry for port name '%s'\n", portname);
         json_object_set_new(reply_root, "status", json_integer(-ENOENT));
         return -ENOENT;
     }
@@ -191,7 +191,7 @@ int ppr_set_port_stream_vcs(json_t *reply_root, json_t *args, ppr_thread_args_t 
     //extract number of VCs from command
     json_t *jnum_vcs = json_object_get(args, "num_vcs");
     if (!jnum_vcs) {
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'num_vcs' argument in ppr_set_port_stream_vcs\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: missing 'num_vcs' argument in wpr_set_port_stream_vcs\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }
@@ -199,9 +199,9 @@ int ppr_set_port_stream_vcs(json_t *reply_root, json_t *args, ppr_thread_args_t 
 
     //set the number of active VCs for the port stream
     uint16_t global_port_index = port_entry->global_port_index;
-    ppr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
+    wpr_port_stream_global_t *port_streams = thread_args->port_stream_global_cfg;
     if(port_streams == NULL){
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: port stream global config is NULL in ppr_set_port_stream_vcs\n");
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: port stream global config is NULL in wpr_set_port_stream_vcs\n");
         json_object_set_new(reply_root, "status", json_integer(-EINVAL));
         return -EINVAL;
     }

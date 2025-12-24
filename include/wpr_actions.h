@@ -2,21 +2,21 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
-Filename: ppr_actions.h
+Filename: wpr_actions.h
 Description: header file containing app wide constants and structs around flow actions and global policies. 
 
 */
 #include <netinet/in.h>
 #include <rte_ether.h>
 
-#include "ppr_log.h"
+#include "wpr_log.h"
 
-#ifndef PPR_ACTIONS_H
-#define PPR_ACTIONS_H
+#ifndef WPR_ACTIONS_H
+#define WPR_ACTIONS_H
 
 
 //Enum for flow action kinds - keep < 8 bits
-typedef enum ppr_flow_action_kind {
+typedef enum wpr_flow_action_kind {
     FLOW_ACT_NOOP           = 0, //no modifications 
     FLOW_ACT_DROP           = 1, //drop packet
     FLOW_ACT_MODIFY_SRCMAC  = 2, //modify source mac
@@ -29,26 +29,26 @@ typedef enum ppr_flow_action_kind {
     FLOW_ACT_MODIFY_DST_ALL = 9,
     FLOW_ACT_MODIFY_ALL     = 10,
     FLOW_ACT_MAX_
-} ppr_flow_action_kind_t;
+} wpr_flow_action_kind_t;
 
 
-typedef struct ppr_policy_action {
+typedef struct wpr_policy_action {
     bool                    valid;    
     bool                    hit;       //true if matched a rule, false if default action         
     uint32_t                idx; 
     uint32_t                priority;      
-    ppr_flow_action_kind_t  default_policy;
-} ppr_policy_action_t;
+    wpr_flow_action_kind_t  default_policy;
+} wpr_policy_action_t;
 
 
 /* Global Policy Epoch Variables */
-typedef struct ppr_global_policy_epoch{
+typedef struct wpr_global_policy_epoch{
     _Atomic uint64_t acl_policy_epoch;
     _Atomic uint64_t pcap_storage_epoch;
-} ppr_global_policy_epoch_t;
+} wpr_global_policy_epoch_t;
 
 
-static inline const char *ppr_flow_action_kind_to_str(ppr_flow_action_kind_t kind){
+static inline const char *wpr_flow_action_kind_to_str(wpr_flow_action_kind_t kind){
     switch(kind){
         case FLOW_ACT_NOOP:           return "NOOP";
         case FLOW_ACT_DROP:           return "DROP";
@@ -69,14 +69,14 @@ static inline const char *ppr_flow_action_kind_to_str(ppr_flow_action_kind_t kin
 * Print the action part of an ACL rule for debugging.
 * @param a Pointer to the ACL policy action to print.
 **/
-static inline void ppr_acl_print_action(const ppr_policy_action_t *a)
+static inline void wpr_acl_print_action(const wpr_policy_action_t *a)
 {
     if (!a)
         return;
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO,
             "    action: policy=%s (%d)\n",
-            ppr_flow_action_kind_to_str(a->default_policy),
+            wpr_flow_action_kind_to_str(a->default_policy),
             (int)a->default_policy);
 
 }

@@ -1,4 +1,4 @@
-#include "ppr_stats_rpc.h"
+#include "wpr_stats_rpc.h"
 
 /* --------------------------------- Stastics commands --------------------------------- */
 
@@ -14,7 +14,7 @@
 *   - 0 on success
 *   - -EINVAL if input parameters are invalid
 **/
-int ppr_cmd_mem_stats(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_mem_stats(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     pthread_mutex_lock(&(thread_args->global_stats->mem_stats->lock));
     //silence unused param warnings
     (void)reply_root;
@@ -38,7 +38,7 @@ int ppr_cmd_mem_stats(json_t *reply_root, json_t *args, ppr_thread_args_t *threa
 *   - 0 on success
 *   - -EINVAL if input parameters are invalid
 **/
-int ppr_cmd_port_stats(json_t *reply_root, json_t *args, ppr_thread_args_t *thread_args){
+int wpr_cmd_port_stats(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args){
     
     // guard against null
     if (args == NULL){
@@ -51,7 +51,7 @@ int ppr_cmd_port_stats(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
         return -EINVAL;
     }
     int portno = atoi(portno_str);
-    PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "Requested port stats for port %d\n", portno);
+    WPR_LOG(WPR_LOG_RPC, RTE_LOG_DEBUG, "Requested port stats for port %d\n", portno);
 
     //calculate range if requested 
     unsigned int base_port_id = 0;
@@ -76,9 +76,9 @@ int ppr_cmd_port_stats(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
     //iterate across ports and grab latest stats, format into json struct
     for(unsigned int i=base_port_id; i<max_port_id; i++){
         //find entry
-        ppr_port_entry_t *port_entry = ppr_find_port_by_global_index(thread_args->global_port_list, i);
+        wpr_port_entry_t *port_entry = wpr_find_port_by_global_index(thread_args->global_port_list, i);
         if (!port_entry) {
-            PPR_LOG(PPR_LOG_RPC, RTE_LOG_ERR, "Error: Could not find port entry for port ID %u\n", i);
+            WPR_LOG(WPR_LOG_RPC, RTE_LOG_ERR, "Error: Could not find port entry for port ID %u\n", i);
             continue;
         }
 
@@ -91,14 +91,14 @@ int ppr_cmd_port_stats(json_t *reply_root, json_t *args, ppr_thread_args_t *thre
         pthread_mutex_lock(&(port_entry->stats.lock));
 
         //get stats struct pointer 
-        ppr_single_port_stats_t *ps = &port_entry->stats;
+        wpr_single_port_stats_t *ps = &port_entry->stats;
         
-        PPR_LOG(PPR_LOG_RPC, RTE_LOG_DEBUG, "Processing stats for port %d\n", i);
+        WPR_LOG(WPR_LOG_RPC, RTE_LOG_DEBUG, "Processing stats for port %d\n", i);
         rc += sprintf(portname, "port%d",i);
         json_t *portstats = json_object();
         
 
-        if(ps->port_kind == PPR_PORT_TYPE_RING){
+        if(ps->port_kind == WPR_PORT_TYPE_RING){
             rc += json_object_set_new(portstats,"type",json_string("ring"));
             rc += json_object_set_new(portstats,"name",json_string(port_entry->name));
             rc += json_object_set_new(portstats,"enq_pkts",json_integer(ps->ringstats.current_ring_stats->enq_pkts));

@@ -9,13 +9,13 @@ includes memory, port stats, flow table, load balancer, etc. aggregation. but is
 
 The main thread runs in a infinite loop at a poll frequency specified at launch time. 
 
-Note, where possible, stats structures live in a parent struct to which they are associated with (e.g. ppr_port_entry_t contains its own stats struct pointer).
+Note, where possible, stats structures live in a parent struct to which they are associated with (e.g. wpr_port_entry_t contains its own stats struct pointer).
 
-Where there isn't a great landing spot for a stats struct, we place it in the global stats struct ppr_stats_all_t defined here.
+Where there isn't a great landing spot for a stats struct, we place it in the global stats struct wpr_stats_all_t defined here.
 */
 
-#ifndef PPR_STATS_H
-#define PPR_STATS_H
+#ifndef WPR_STATS_H
+#define WPR_STATS_H
 
 #include <stdint.h>
 #include <stdatomic.h> 
@@ -24,13 +24,13 @@ Where there isn't a great landing spot for a stats struct, we place it in the gl
 
 #include <rte_common.h>
 
-#include "ppr_ports.h"
-#include "ppr_acl.h"
+#include "wpr_ports.h"
+#include "wpr_acl.h"
 
 #define STATS_POLL_INTERVAL_MS 100
 
 /* per worker or per port stat structs */
-typedef struct ppr_single_port_stat_seq{
+typedef struct wpr_single_port_stat_seq{
     uint64_t        rx_packets;
     uint64_t        rx_bytes;
     uint64_t        rx_bad_packets;
@@ -39,38 +39,38 @@ typedef struct ppr_single_port_stat_seq{
     uint64_t        tx_packets;
     uint64_t        tx_bytes;
     uint64_t        tx_dropped_packets;
-} ppr_single_worker_stat_seq_t __rte_aligned(RTE_CACHE_LINE_SIZE);
-_Static_assert(sizeof(ppr_single_worker_stat_seq_t) == RTE_CACHE_LINE_SIZE, "worker stats must be one cache line");
+} wpr_single_worker_stat_seq_t __rte_aligned(RTE_CACHE_LINE_SIZE);
+_Static_assert(sizeof(wpr_single_worker_stat_seq_t) == RTE_CACHE_LINE_SIZE, "worker stats must be one cache line");
 
-typedef struct ppr_worker_stats{
+typedef struct wpr_worker_stats{
     pthread_mutex_t lock;
     unsigned int num_workers; 
-    ppr_single_worker_stat_seq_t  *prev_worker_stats;
-    ppr_single_worker_stat_seq_t  *current_worker_stats;
-    ppr_single_worker_stat_seq_t  *rates_worker_stats;
+    wpr_single_worker_stat_seq_t  *prev_worker_stats;
+    wpr_single_worker_stat_seq_t  *current_worker_stats;
+    wpr_single_worker_stat_seq_t  *rates_worker_stats;
     struct timespec prev_ts; 
     struct timespec curr_ts; 
-} ppr_worker_stats_t;
+} wpr_worker_stats_t;
 
 //memory subsystem stats 
-typedef struct ppr_mempool_stats{
+typedef struct wpr_mempool_stats{
     uint64_t available; 
     uint64_t used; 
     uint64_t total; 
-} ppr_mempool_stats_t;
+} wpr_mempool_stats_t;
 
-typedef struct ppr_all_memory_stats{
+typedef struct wpr_all_memory_stats{
     pthread_mutex_t lock; 
-    ppr_mempool_stats_t *mstats;
-} ppr_all_memory_stats_t;
+    wpr_mempool_stats_t *mstats;
+} wpr_all_memory_stats_t;
 
 //main stats entry struct 
-typedef struct ppr_stats_all{
-    ppr_worker_stats_t      *worker_stats;
-    ppr_all_memory_stats_t  *mem_stats; 
-} ppr_stats_all_t;
+typedef struct wpr_stats_all{
+    wpr_worker_stats_t      *worker_stats;
+    wpr_all_memory_stats_t  *mem_stats; 
+} wpr_stats_all_t;
 
 
-void *run_ppr_stats_thread(void *arg);
+void *run_wpr_stats_thread(void *arg);
 
-#endif /* PPR_STATS_H */
+#endif /* WPR_STATS_H */

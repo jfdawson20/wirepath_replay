@@ -2,7 +2,7 @@
 SPDX-License-Identifier: MIT
 Copyright (c) 2025 jfdawson20
 
-Filename: ppr_ports.c 
+Filename: wpr_ports.c 
 Description: the ports API is responsible for managing all ports in the system, including physical NIC ports and ring based ports. it includes logic for 
 building and maintaining a global port list structure that contains all ports in the system along with their parameters. it also includes logic for 
 initializing physical ports via DPDK and setting up ring based ports. the ports API also provides a simple dynamic array implementation for managing the list 
@@ -10,7 +10,7 @@ of ports.
 
 During initialization, the ports API is used to create the global port list based on the application configuration, and assign ports and queues to worker cores.
 the global port list is then passed to other subsystems such as the egress table and packet I/O API to allow them to interact with ports in a uniform manner. The
-heart of the ports API is the ppr_port_entry_t struct which contains all relevant information about a port, including its type (physical or ring), port ID, queue assignments,
+heart of the ports API is the wpr_port_entry_t struct which contains all relevant information about a port, including its type (physical or ring), port ID, queue assignments,
 and statistics. The ports API also includes functions for adding, deleting, and finding ports in the global port list, as well as printing the port list for 
 debugging purposes.
 
@@ -36,11 +36,11 @@ debugging purposes.
 #include <rte_malloc.h>
 
 
-#include "ppr_app_defines.h"
-#include "ppr_ports.h"
-#include "ppr_log.h"
+#include "wpr_app_defines.h"
+#include "wpr_ports.h"
+#include "wpr_log.h"
 
-ppr_ring_stats_name_t PPR_PORT_RINGSTAT_NAMES[] = {
+wpr_ring_stats_name_t WPR_PORT_RINGSTAT_NAMES[] = {
     {"enq_pkts"},
     {"deq_pkts"},
     {"drop_pkts"},
@@ -55,22 +55,22 @@ ppr_ring_stats_name_t PPR_PORT_RINGSTAT_NAMES[] = {
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_port_list_init(ppr_ports_t **port_list_ptr) {
+int wpr_port_list_init(wpr_ports_t **port_list_ptr) {
     if (*port_list_ptr != NULL){
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "Port list pointer must be NULL on init\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "Port list pointer must be NULL on init\n");
         return -EINVAL;
     }
 
-    *port_list_ptr = (ppr_ports_t *)calloc(1,sizeof(ppr_ports_t));
+    *port_list_ptr = (wpr_ports_t *)calloc(1,sizeof(wpr_ports_t));
     if (!*port_list_ptr) {
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "Failed to allocate memory for port list\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "Failed to allocate memory for port list\n");
         return -ENOMEM; // allocation failed
     }
 
-    ppr_ports_t *port_list = *port_list_ptr;
+    wpr_ports_t *port_list = *port_list_ptr;
     port_list->num_ports = 0;
     port_list->port_capacity = 4; // initial capacity
-    port_list->ports = (ppr_port_entry_t *)malloc(sizeof(ppr_port_entry_t) * port_list->port_capacity);
+    port_list->ports = (wpr_port_entry_t *)malloc(sizeof(wpr_port_entry_t) * port_list->port_capacity);
     return 0;
 }
 
@@ -81,13 +81,13 @@ int ppr_port_list_init(ppr_ports_t **port_list_ptr) {
 * @return
 *   0 on success, negative errno on failure.
 **/
-void ppr_port_list_free(ppr_ports_t *list)
+void wpr_port_list_free(wpr_ports_t *list)
 {
     if (!list) return;
 
     for (unsigned i = 0; i < list->num_ports; i++) {
-        ppr_port_entry_t *p = &list->ports[i];
-        ppr_free_port(p);
+        wpr_port_entry_t *p = &list->ports[i];
+        wpr_free_port(p);
     }
 
     free(list->ports);
@@ -107,13 +107,13 @@ void ppr_port_list_free(ppr_ports_t *list)
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_portlist_add(ppr_ports_t *port_list, const char * name, uint16_t port_id, 
-    bool is_external,ppr_port_kind_t kind, uint16_t total_rx_queues, uint16_t total_tx_queues, ppr_port_dir_t dir) {
+int wpr_portlist_add(wpr_ports_t *port_list, const char * name, uint16_t port_id, 
+    bool is_external,wpr_port_kind_t kind, uint16_t total_rx_queues, uint16_t total_tx_queues, wpr_port_dir_t dir) {
     
     // Resize ports array if needed
     if (port_list->num_ports >= port_list->port_capacity) {
         port_list->port_capacity *= 2;
-        port_list->ports = realloc(port_list->ports, sizeof(ppr_port_entry_t) * port_list->port_capacity);
+        port_list->ports = realloc(port_list->ports, sizeof(wpr_port_entry_t) * port_list->port_capacity);
         if (!port_list->ports) {
             return -ENOMEM; // realloc failed
         }
@@ -154,7 +154,7 @@ int ppr_portlist_add(ppr_ports_t *port_list, const char * name, uint16_t port_id
     port_list->ports[port_list->num_ports].global_port_index = port_list->num_ports;
 
     //state variables 
-    if(kind == PPR_PORT_TYPE_ETHQ){
+    if(kind == WPR_PORT_TYPE_ETHQ){
         port_list->ports[port_list->num_ports].admin_state   = false; 
         port_list->ports[port_list->num_ports].is_up         = false; 
     }
@@ -182,12 +182,12 @@ int ppr_portlist_add(ppr_ports_t *port_list, const char * name, uint16_t port_id
 * @param node
 *   Pointer to the load balancing node structure.   
 **/
-int ppr_free_port(ppr_port_entry_t *port) {
+int wpr_free_port(wpr_port_entry_t *port) {
     
     free(port->rx_queue_assignments);
     free(port->tx_queue_assignments);
     //port stats allocates memory, make sure to free it
-    ppr_port_stats_free(port);
+    wpr_port_stats_free(port);
     
     if (port->name) {
         free((void *)port->name);
@@ -204,13 +204,13 @@ int ppr_free_port(ppr_port_entry_t *port) {
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_portlist_delete_byname(ppr_ports_t *port_list, const char *port_name) {
+int wpr_portlist_delete_byname(wpr_ports_t *port_list, const char *port_name) {
     for (unsigned int i = 0; i < port_list->num_ports; i++) {
         if (strcmp(port_list->ports[i].name, port_name) == 0) {
-            ppr_free_port(&port_list->ports[i]);
+            wpr_free_port(&port_list->ports[i]);
 
             // Shift remaining ports down
-            memmove(&port_list->ports[i], &port_list->ports[i + 1], sizeof(ppr_port_entry_t) * (port_list->num_ports - i - 1));
+            memmove(&port_list->ports[i], &port_list->ports[i + 1], sizeof(wpr_port_entry_t) * (port_list->num_ports - i - 1));
             port_list->num_ports--;
             return 0; // success
         }
@@ -227,13 +227,13 @@ int ppr_portlist_delete_byname(ppr_ports_t *port_list, const char *port_name) {
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_portlist_delete_byportid(ppr_ports_t *port_list, uint16_t port_id) {
+int wpr_portlist_delete_byportid(wpr_ports_t *port_list, uint16_t port_id) {
     for (unsigned int i = 0; i < port_list->num_ports; i++) {
         if (port_list->ports[i].port_id == port_id) {
-            ppr_free_port(&port_list->ports[i]);
+            wpr_free_port(&port_list->ports[i]);
 
             // Shift remaining ports down
-            memmove(&port_list->ports[i], &port_list->ports[i + 1], sizeof(ppr_port_entry_t) * (port_list->num_ports - i - 1));
+            memmove(&port_list->ports[i], &port_list->ports[i + 1], sizeof(wpr_port_entry_t) * (port_list->num_ports - i - 1));
             port_list->num_ports--;
             return 0; // success
         }
@@ -250,7 +250,7 @@ int ppr_portlist_delete_byportid(ppr_ports_t *port_list, uint16_t port_id) {
 * @return
 *   Pointer to the port structure, or NULL if not found.
 **/
-ppr_port_entry_t *ppr_find_port_byname(ppr_ports_t *port_list, const char *name)
+wpr_port_entry_t *wpr_find_port_byname(wpr_ports_t *port_list, const char *name)
 {
     for (unsigned int i = 0; i < port_list->num_ports; i++) {
         if (strcmp(port_list->ports[i].name, name) == 0) {
@@ -260,7 +260,7 @@ ppr_port_entry_t *ppr_find_port_byname(ppr_ports_t *port_list, const char *name)
     return NULL; // port not found
 }
 
-ppr_port_entry_t *ppr_find_port_byid(ppr_ports_t *port_list, uint16_t port_id)
+wpr_port_entry_t *wpr_find_port_byid(wpr_ports_t *port_list, uint16_t port_id)
 {
     for (unsigned int i = 0; i < port_list->num_ports; i++) {
         if (port_list->ports[i].port_id == port_id) {
@@ -270,7 +270,7 @@ ppr_port_entry_t *ppr_find_port_byid(ppr_ports_t *port_list, uint16_t port_id)
     return NULL; // port not found
 }
 
-ppr_port_entry_t *ppr_find_port_by_global_index(ppr_ports_t *port_list, uint16_t global_port_index)
+wpr_port_entry_t *wpr_find_port_by_global_index(wpr_ports_t *port_list, uint16_t global_port_index)
 {
     for (unsigned int i = 0; i < port_list->num_ports; i++) {
         if (port_list->ports[i].global_port_index == global_port_index) {
@@ -282,25 +282,25 @@ ppr_port_entry_t *ppr_find_port_by_global_index(ppr_ports_t *port_list, uint16_t
 
 
 
-void ppr_portlist_print(ppr_ports_t *port_list){
-    PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\n Dumping Global Port List: num_ports=%u\n", port_list->num_ports);
+void wpr_portlist_print(wpr_ports_t *port_list){
+    WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\n Dumping Global Port List: num_ports=%u\n", port_list->num_ports);
     for (unsigned int i = 0; i < port_list->num_ports; i++) {
         char direction[32];
-        if (port_list->ports[i].dir == PPR_PORT_RX){
+        if (port_list->ports[i].dir == WPR_PORT_RX){
             snprintf(direction, sizeof(direction), "RX");
         }
-        else if (port_list->ports[i].dir == PPR_PORT_TX){
+        else if (port_list->ports[i].dir == WPR_PORT_TX){
             snprintf(direction, sizeof(direction), "TX");
         }
         else {
             snprintf(direction, sizeof(direction), "RXTX");
         }
 
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\tPort %u: Name=%s, PortID=%u, Type=%s, External=%s, Direction=%s, AdminState=%s, LinkState=%s, Speed=%u Mbps\n",
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\tPort %u: Name=%s, PortID=%u, Type=%s, External=%s, Direction=%s, AdminState=%s, LinkState=%s, Speed=%u Mbps\n",
             i,
             port_list->ports[i].name,
             port_list->ports[i].port_id,
-            (port_list->ports[i].kind == PPR_PORT_TYPE_ETHQ) ? "ETHQ" : "RING",
+            (port_list->ports[i].kind == WPR_PORT_TYPE_ETHQ) ? "ETHQ" : "RING",
             port_list->ports[i].is_external ? "Yes" : "No",
             direction,
 
@@ -308,18 +308,18 @@ void ppr_portlist_print(ppr_ports_t *port_list){
             port_list->ports[i].is_up ? "Up" : "Down",
             port_list->ports[i].speed_mbps);
 
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\t\tRX Queue Assignments: ");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\t\tRX Queue Assignments: ");
         for (unsigned int q=0; q < port_list->ports[i].total_rx_queues; q++){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "%u ", port_list->ports[i].rx_queue_assignments[q]);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "%u ", port_list->ports[i].rx_queue_assignments[q]);
         }
         
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\n");
         
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\t\tTX Queue Assignments: ");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\t\tTX Queue Assignments: ");
         for (unsigned int q=0; q < port_list->ports[i].total_tx_queues; q++){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "%u ", port_list->ports[i].tx_queue_assignments[q]);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "%u ", port_list->ports[i].tx_queue_assignments[q]);
         }
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\n");    
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\n");    
     }
     return;
 }
@@ -333,11 +333,11 @@ void ppr_portlist_print(ppr_ports_t *port_list){
 * @return
 *   Pointer to an array of core_port_mapping_t structures, one per worker core.
 **/
-int ppr_map_ports_to_workers(ppr_ports_t *global_port_list, unsigned int worker_cores)
+int wpr_map_ports_to_workers(wpr_ports_t *global_port_list, unsigned int worker_cores)
 {
     if (!global_port_list) {
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR,
-                "ppr_map_ports_to_workers: global_port_list is NULL\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR,
+                "wpr_map_ports_to_workers: global_port_list is NULL\n");
         return -EINVAL;
     }
 
@@ -346,8 +346,8 @@ int ppr_map_ports_to_workers(ppr_ports_t *global_port_list, unsigned int worker_
      * worker cores are 1..worker_cores-1
      */
     if (worker_cores < 2) {
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR,
-                "ppr_map_ports_to_workers: need at least 1 worker core (worker_cores >= 2)\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR,
+                "wpr_map_ports_to_workers: need at least 1 worker core (worker_cores >= 2)\n");
         return -EINVAL;
     }
 
@@ -358,19 +358,19 @@ int ppr_map_ports_to_workers(ppr_ports_t *global_port_list, unsigned int worker_
     unsigned int rr_tx = 0;
 
     for (unsigned int i = 0; i < global_port_list->num_ports; i++) {
-        ppr_port_entry_t *port = &global_port_list->ports[i];
+        wpr_port_entry_t *port = &global_port_list->ports[i];
 
         /* Manager-only special case: everything pinned to core 0 */
-        if (port->dir == PPR_PORT_RXTX_MGRONLY) {
+        if (port->dir == WPR_PORT_RXTX_MGRONLY) {
             for (uint16_t q = 0; q < port->total_rx_queues; q++) {
                 port->rx_queue_assignments[q] = 0;
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO,
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO,
                         "Assigned RX queue %u of port %s to MGR core 0\n",
                         q, port->name);
             }
             for (uint16_t q = 0; q < port->total_tx_queues; q++) {
                 port->tx_queue_assignments[q] = 0;
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO,
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO,
                         "Assigned TX queue %u of port %s to MGR core 0\n",
                         q, port->name);
             }
@@ -379,30 +379,30 @@ int ppr_map_ports_to_workers(ppr_ports_t *global_port_list, unsigned int worker_
         }
 
         /* Validate direction */
-        if (port->dir != PPR_PORT_RX &&
-            port->dir != PPR_PORT_TX &&
-            port->dir != PPR_PORT_RXTX)
+        if (port->dir != WPR_PORT_RX &&
+            port->dir != WPR_PORT_TX &&
+            port->dir != WPR_PORT_RXTX)
         {
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR,
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR,
                     "Invalid port direction %d for port %s\n",
                     port->dir, port->name);
             return -EINVAL;
         }
 
-        if(port->kind == PPR_PORT_TYPE_DROP){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO,
+        if(port->kind == WPR_PORT_TYPE_DROP){
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO,
                     "Skipping queue assignment for drop port %s\n",
                     port->name);
             continue;
         }
 
         /* RX: round-robin over worker cores 1..worker_cores-1 */
-        if (port->dir == PPR_PORT_RX || port->dir == PPR_PORT_RXTX) {
+        if (port->dir == WPR_PORT_RX || port->dir == WPR_PORT_RXTX) {
             for (uint16_t q = 0; q < port->total_rx_queues; q++) {
                 unsigned int core_id = (rr_rx % worker_count) + 1;  /* 1..worker_cores-1 */
 
                 port->rx_queue_assignments[q] = core_id;
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO,
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO,
                         "Assigned RX queue %u of port %s to core %u\n",
                         q, port->name, core_id);
 
@@ -411,12 +411,12 @@ int ppr_map_ports_to_workers(ppr_ports_t *global_port_list, unsigned int worker_
         }
 
         /* TX: round-robin over worker cores 1..worker_cores-1 */
-        if (port->dir == PPR_PORT_TX || port->dir == PPR_PORT_RXTX) {
+        if (port->dir == WPR_PORT_TX || port->dir == WPR_PORT_RXTX) {
             for (uint16_t q = 0; q < port->total_tx_queues; q++) {
                 unsigned int core_id = (rr_tx % worker_count) + 1;  /* 1..worker_cores-1 */
 
                 port->tx_queue_assignments[q] = core_id;
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO,
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO,
                         "Assigned TX queue %u of port %s to core %u\n",
                         q, port->name, core_id);
 
@@ -426,15 +426,15 @@ int ppr_map_ports_to_workers(ppr_ports_t *global_port_list, unsigned int worker_
     }
 
     //map drop port explicitly 
-    ppr_port_entry_t *drop_port = ppr_find_port_byname(global_port_list, "drop_port");
+    wpr_port_entry_t *drop_port = wpr_find_port_byname(global_port_list, "drop_port");
     if(!drop_port){
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "Drop port not found in global port list\n");
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "Drop port not found in global port list\n");
         return -ENOENT;
     }
 
     for(unsigned int i=0; i<worker_cores;i++){
         drop_port->tx_queue_assignments[i] = i; //all cores can access drop port tx queue 0
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO,
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO,
                 "Assigned TX queue 0 of drop port %s to core %u\n",
                 drop_port->name, i);
     }
@@ -457,7 +457,7 @@ int ppr_map_ports_to_workers(ppr_ports_t *global_port_list, unsigned int worker_
     *   - -ENOENT if the port ID could not be found
     *   - -EINVAL if input parameters are invalid
 **/
-int ppr_get_port_id_by_pci_addr(const char *bdf, uint16_t *port_id_out)
+int wpr_get_port_id_by_pci_addr(const char *bdf, uint16_t *port_id_out)
 {
     if (!bdf || !port_id_out)
         return -EINVAL;
@@ -482,7 +482,7 @@ int ppr_get_port_id_by_pci_addr(const char *bdf, uint16_t *port_id_out)
 }
 
 
-int ppr_port_config_queues(uint16_t portid, uint16_t rx_rings, uint16_t tx_rings, uint16_t nb_rxd, uint16_t nb_txd, 
+int wpr_port_config_queues(uint16_t portid, uint16_t rx_rings, uint16_t tx_rings, uint16_t nb_rxd, uint16_t nb_txd, 
     struct rte_mempool *mbuf_pool, struct rte_eth_rxconf *rxq_conf, struct rte_eth_txconf *txconf)
 {
     int retval = 0;
@@ -493,7 +493,7 @@ int ppr_port_config_queues(uint16_t portid, uint16_t rx_rings, uint16_t tx_rings
     for (q = 0; q < rx_rings; q++) {
             retval = rte_eth_rx_queue_setup(portid, q, nb_rxd, rte_eth_dev_socket_id(portid), rxq_conf, mbuf_pool);
             if (retval < 0) {
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError setting up rx queue %"PRIu16 " for port %"PRIu16 "\n",q,portid);
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError setting up rx queue %"PRIu16 " for port %"PRIu16 "\n",q,portid);
                 return -ENOTSUP;
             }
     }
@@ -512,7 +512,7 @@ int ppr_port_config_queues(uint16_t portid, uint16_t rx_rings, uint16_t tx_rings
 
             retval = rte_eth_tx_queue_setup(portid, q, nb_txd, rte_eth_dev_socket_id(portid), txconf);
             if (retval < 0) {
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError setting up tx queue %"PRIu16 " for port %"PRIu16 "\n",q,portid);
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError setting up tx queue %"PRIu16 " for port %"PRIu16 "\n",q,portid);
                 return -ENOTSUP;
             }
     }
@@ -527,7 +527,7 @@ int ppr_port_config_queues(uint16_t portid, uint16_t rx_rings, uint16_t tx_rings
     *   Port ID to initialize.
     * @param mbuf_pool
     *   Mempool to use for RX/TX buffers.
-    * @param ppr_app_cfg
+    * @param wpr_app_cfg
     *   Pointer to the application configuration.
     *
     * @return
@@ -535,7 +535,7 @@ int ppr_port_config_queues(uint16_t portid, uint16_t rx_rings, uint16_t tx_rings
     *   - -ENOENT if the port ID is invalid or other errors occur
     *   - -ENOTSUP if the port configuration is not supported
 **/
-int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempool *mbuf_pool, ppr_portinit_cfg_t *port_init_cfg)
+int wpr_port_init(wpr_port_entry_t *port_entry, uint16_t port, struct rte_mempool *mbuf_pool, wpr_portinit_cfg_t *port_init_cfg)
 {
         struct rte_eth_conf port_conf;
         const uint16_t rx_rings_req = port_init_cfg->num_rxq;
@@ -548,14 +548,14 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
 
         //check if port number is valid 
         if (!rte_eth_dev_is_valid_port(port)){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tInvalid port ID %"PRIu16 "\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tInvalid port ID %"PRIu16 "\n",port);
             return -ENOENT;
         }
 
         //get device info structure 
         retval = rte_eth_dev_info_get(port, &dev_info);
         if (retval != 0) {
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError getting device info for port %"PRIu16 "\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError getting device info for port %"PRIu16 "\n",port);
             return -ENOENT;
         }
 
@@ -566,19 +566,19 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
         
         /* Disabled - bug with I226 nic and rx timestamping
         if (dev_info.rx_offload_capa & RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\t\tPort %u supports RX timestamps\n", port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\t\tPort %u supports RX timestamps\n", port);
             port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
             rxq_conf.offloads |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
         } 
         else {
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_WARNING, "\t\tPort %"PRIu16 " does not support RX timestamps\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_WARNING, "\t\tPort %"PRIu16 " does not support RX timestamps\n",port);
         }*/
 
         /* Configure port properties based on device info and other factors */
         //do not use fast free mbufs since we are sending clones
         if (port_init_cfg->tx_multiseg_offload){
             if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MULTI_SEGS){
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling multi-segment offload on port %"PRIu16 "\n",port);
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling multi-segment offload on port %"PRIu16 "\n",port);
                 port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
             }
         }
@@ -586,21 +586,21 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
         //configure tx checksum offloads if enabled in config
         if (port_init_cfg->tx_ip_checksum_offload){
             if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM){
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling IPv4 checksum offload on port %"PRIu16 "\n",port);
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling IPv4 checksum offload on port %"PRIu16 "\n",port);
                 port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
             }
         }
 
         if (port_init_cfg->tx_tcp_checksum_offload){
             if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_TCP_CKSUM){
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling TCP checksum offload on port %"PRIu16 "\n",port);
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling TCP checksum offload on port %"PRIu16 "\n",port);
                 port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_TCP_CKSUM;
             }
         }   
 
         if (port_init_cfg->tx_udp_checksum_offload){
             if (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM){
-                PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling UDP checksum offload on port %"PRIu16 "\n",port);
+                WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, "\t\tEnabling UDP checksum offload on port %"PRIu16 "\n",port);
                 port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_UDP_CKSUM;
             }
         }   
@@ -614,13 +614,13 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
         /* Mask with NIC capabilities */
         rss_hf &= dev_info.flow_type_rss_offloads;
         if (rss_hf == 0) {
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_WARNING,
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_WARNING,
                     "\t\tPort %u: NIC does not support requested RSS types, using default\n",
                     port);
             rss_hf = dev_info.flow_type_rss_offloads;
         }
         else{
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO,
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO,
                     "\t\tPort %u: Configuring RSS for flows: %s%s%s\n",
                     port,
                     (rss_hf & RTE_ETH_RSS_IP)  ? "IP "  : "",
@@ -642,29 +642,29 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
 
         retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
         if (retval != 0){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError configuring port %"PRIu16 "\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError configuring port %"PRIu16 "\n",port);
             return -ENOTSUP;
         }
         //set rx/tx ring sizes 
         retval = rte_eth_dev_adjust_nb_rx_tx_desc(port, &nb_rxd, &nb_txd);
         if (retval != 0){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError adjusting rx/tx desc for port %"PRIu16 "\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError adjusting rx/tx desc for port %"PRIu16 "\n",port);
             return -ENOTSUP;
         }
 
         //configure queues 
         txconf = dev_info.default_txconf;
         txconf.offloads = port_conf.txmode.offloads;
-        retval = ppr_port_config_queues(port, rx_rings, tx_rings, nb_rxd, nb_txd, mbuf_pool, &rxq_conf, &txconf);
+        retval = wpr_port_config_queues(port, rx_rings, tx_rings, nb_rxd, nb_txd, mbuf_pool, &rxq_conf, &txconf);
         if (retval != 0){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError configuring queues for port %"PRIu16 "\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError configuring queues for port %"PRIu16 "\n",port);
             return retval;
         }
 
         /* Start the Ethernet port. */
         retval = rte_eth_dev_start(port);
         if (retval < 0) {
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError starting port %"PRIu16 "\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError starting port %"PRIu16 "\n",port);
             return -ENOENT;
         }   
 
@@ -672,13 +672,13 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
         struct rte_ether_addr addr;
         retval = rte_eth_macaddr_get(port, &addr);
         if (retval != 0) {
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError getting MAC address for port %"PRIu16 "\n",port);
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError getting MAC address for port %"PRIu16 "\n",port);
             return -ENOENT;
         }
 
         char bdf[64];
         rte_eth_dev_get_name_by_port(port, bdf);
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_INFO, 
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_INFO, 
                 "\t\tPort %u MAC: %02x:%02x:%02x:%02x:%02x:%02x, PCI Bus ID: %s\n",
                 port,
                 addr.addr_bytes[0], addr.addr_bytes[1],
@@ -689,14 +689,14 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
         /* Enable RX in promiscuous mode for the Ethernet device. */
         retval = rte_eth_promiscuous_enable(port);
         if (retval != 0){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError enabling promiscuous mode for port %"PRIu16 "\n",port);  
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError enabling promiscuous mode for port %"PRIu16 "\n",port);  
             return -ENOTSUP;
         }
 
         //make sure port is down to start with
         retval = rte_eth_dev_set_link_down(port);
         if (retval != 0){
-            PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError setting link down for port %"PRIu16 "\n",port);  
+            WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "\t\tError setting link down for port %"PRIu16 "\n",port);  
             return -ENOTSUP;
         }
 
@@ -725,12 +725,12 @@ int ppr_port_init(ppr_port_entry_t *port_entry, uint16_t port, struct rte_mempoo
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_port_set_link_state(ppr_port_entry_t *port_entry, bool admin_up)
+int wpr_port_set_link_state(wpr_port_entry_t *port_entry, bool admin_up)
 {
     int rc;
 
     if(port_entry->is_external == false){
-        PPR_LOG(PPR_LOG_PORTS, RTE_LOG_ERR, "Cannot set link state on internal port %s\n", port_entry->name);
+        WPR_LOG(WPR_LOG_PORTS, RTE_LOG_ERR, "Cannot set link state on internal port %s\n", port_entry->name);
         return -EINVAL;
     }
 
@@ -760,14 +760,14 @@ int ppr_port_set_link_state(ppr_port_entry_t *port_entry, bool admin_up)
 * @return
 *   n stats count on success, negative errno on failure.
 **/
-int ppr_port_stats_init(ppr_port_entry_t *port_entry){
+int wpr_port_stats_init(wpr_port_entry_t *port_entry){
     //initialize port stat lock for this port 
     
     int num_stats = 0;
     pthread_mutex_init(&port_entry->stats.lock, NULL);
 
-    if(port_entry->kind == PPR_PORT_TYPE_ETHQ){
-        port_entry->stats.port_kind = PPR_PORT_TYPE_ETHQ;
+    if(port_entry->kind == WPR_PORT_TYPE_ETHQ){
+        port_entry->stats.port_kind = WPR_PORT_TYPE_ETHQ;
 
         //get number of xstats for this port
         int n_xstats = rte_eth_xstats_get(port_entry->port_id, NULL, 0);
@@ -829,24 +829,24 @@ int ppr_port_stats_init(ppr_port_entry_t *port_entry){
             const char *src = port_entry->stats.xstats.port_stats_names[i].name;
 
             /* We need room for src + "_rate" + '\0'
-            * So limit src to (RTE_ETH_XSTATS_NAME_SIZE - 1 - PPR_RATE_SUFFIX_LEN)
+            * So limit src to (RTE_ETH_XSTATS_NAME_SIZE - 1 - WPR_RATE_SUFFIX_LEN)
             */
-            const int max_src_len = RTE_ETH_XSTATS_NAME_SIZE - 1 - PPR_RATE_SUFFIX_LEN;
+            const int max_src_len = RTE_ETH_XSTATS_NAME_SIZE - 1 - WPR_RATE_SUFFIX_LEN;
             const int src_len = max_src_len > 0 ? max_src_len : 0;
 
-            snprintf(dst,RTE_ETH_XSTATS_NAME_SIZE,"%.*s%s",src_len,src,PPR_RATE_SUFFIX);
+            snprintf(dst,RTE_ETH_XSTATS_NAME_SIZE,"%.*s%s",src_len,src,WPR_RATE_SUFFIX);
         }
 
         num_stats = n_xstats;
     }
-    else if (port_entry->kind == PPR_PORT_TYPE_RING){
-        port_entry->stats.port_kind = PPR_PORT_TYPE_RING;
-        port_entry->stats.ringstats.n_stats = RTE_DIM(PPR_PORT_RINGSTAT_NAMES);
+    else if (port_entry->kind == WPR_PORT_TYPE_RING){
+        port_entry->stats.port_kind = WPR_PORT_TYPE_RING;
+        port_entry->stats.ringstats.n_stats = RTE_DIM(WPR_PORT_RINGSTAT_NAMES);
         port_entry->stats.ringstats.n_stats_total = port_entry->stats.ringstats.n_stats * 2; //include rate stats
-        port_entry->stats.ringstats.ring_stats_names = &PPR_PORT_RINGSTAT_NAMES[0];
+        port_entry->stats.ringstats.ring_stats_names = &WPR_PORT_RINGSTAT_NAMES[0];
 
         port_entry->stats.ringstats.ring_stats_names_rates = rte_zmalloc("ring_stats_names_rates",
-                                                                        sizeof(ppr_ring_stats_name_t) * port_entry->stats.ringstats.n_stats,
+                                                                        sizeof(wpr_ring_stats_name_t) * port_entry->stats.ringstats.n_stats,
                                                                         RTE_CACHE_LINE_SIZE);
         if (port_entry->stats.ringstats.ring_stats_names_rates == NULL) {
             return -ENOMEM;
@@ -857,17 +857,17 @@ int ppr_port_stats_init(ppr_port_entry_t *port_entry){
             const char *src = port_entry->stats.ringstats.ring_stats_names[i].name;
 
             /* We need room for src + "_rate" + '\0'
-            * So limit src to (RTE_ETH_XSTATS_NAME_SIZE - 1 - PPR_RATE_SUFFIX_LEN)
+            * So limit src to (RTE_ETH_XSTATS_NAME_SIZE - 1 - WPR_RATE_SUFFIX_LEN)
             */
-            const int max_src_len = RTE_ETH_XSTATS_NAME_SIZE - 1 - PPR_RATE_SUFFIX_LEN;
+            const int max_src_len = RTE_ETH_XSTATS_NAME_SIZE - 1 - WPR_RATE_SUFFIX_LEN;
             const int src_len = max_src_len > 0 ? max_src_len : 0;
 
-            snprintf(dst,RTE_ETH_XSTATS_NAME_SIZE,"%.*s%s",src_len,src,PPR_RATE_SUFFIX);
+            snprintf(dst,RTE_ETH_XSTATS_NAME_SIZE,"%.*s%s",src_len,src,WPR_RATE_SUFFIX);
         }
 
         //initialize stats data - previous sample
         port_entry->stats.ringstats.prev_ring_stats = rte_zmalloc("prev_ring_port_stats",
-                                                                        sizeof(ppr_ring_stats_shard_t),
+                                                                        sizeof(wpr_ring_stats_shard_t),
                                                                         RTE_CACHE_LINE_SIZE);
 
         if (port_entry->stats.ringstats.prev_ring_stats == NULL) {
@@ -876,7 +876,7 @@ int ppr_port_stats_init(ppr_port_entry_t *port_entry){
 
         //initialize stats data - current sample
         port_entry->stats.ringstats.current_ring_stats = rte_zmalloc("current_ring_port_stats",
-                                                                        sizeof(ppr_ring_stats_shard_t),
+                                                                        sizeof(wpr_ring_stats_shard_t),
                                                                         RTE_CACHE_LINE_SIZE);
 
         if (port_entry->stats.ringstats.current_ring_stats == NULL) {
@@ -885,7 +885,7 @@ int ppr_port_stats_init(ppr_port_entry_t *port_entry){
 
         //initialize stats data - rate stats 
         port_entry->stats.ringstats.rates_ring_stats = rte_zmalloc("rates_ring_port_stats",
-                                                                        sizeof(ppr_ring_stats_shard_t),
+                                                                        sizeof(wpr_ring_stats_shard_t),
                                                                         RTE_CACHE_LINE_SIZE);
 
         if (port_entry->stats.ringstats.rates_ring_stats == NULL) {
@@ -893,7 +893,7 @@ int ppr_port_stats_init(ppr_port_entry_t *port_entry){
         }
         num_stats = port_entry->stats.ringstats.n_stats;
     }   
-    else if (port_entry->kind == PPR_PORT_TYPE_DROP){
+    else if (port_entry->kind == WPR_PORT_TYPE_DROP){
         // do nothing
     }
 
@@ -911,24 +911,24 @@ int ppr_port_stats_init(ppr_port_entry_t *port_entry){
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_port_stats_free(ppr_port_entry_t *port_entry){
+int wpr_port_stats_free(wpr_port_entry_t *port_entry){
     //free port stats memory 
     pthread_mutex_destroy(&port_entry->stats.lock);
 
-    if(port_entry->kind == PPR_PORT_TYPE_ETHQ){
+    if(port_entry->kind == WPR_PORT_TYPE_ETHQ){
         rte_free(port_entry->stats.xstats.port_stats_names);
         rte_free(port_entry->stats.xstats.port_stats_names_rates);
         rte_free(port_entry->stats.xstats.prev_port_stats);
         rte_free(port_entry->stats.xstats.current_port_stats);
         rte_free(port_entry->stats.xstats.rates_port_stats);
     }
-    else if (port_entry->kind == PPR_PORT_TYPE_RING){
+    else if (port_entry->kind == WPR_PORT_TYPE_RING){
         rte_free(port_entry->stats.ringstats.ring_stats_names_rates);   
         rte_free(port_entry->stats.ringstats.prev_ring_stats);
         rte_free(port_entry->stats.ringstats.current_ring_stats);
         rte_free(port_entry->stats.ringstats.rates_ring_stats);
     }
-    else if (port_entry->kind == PPR_PORT_TYPE_DROP){
+    else if (port_entry->kind == WPR_PORT_TYPE_DROP){
         // do nothing
     }
 

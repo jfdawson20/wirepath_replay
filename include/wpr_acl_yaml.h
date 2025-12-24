@@ -1,17 +1,17 @@
-#ifndef PPR_ACL_YAML_H
-#define PPR_ACL_YAML_H
+#ifndef WPR_ACL_YAML_H
+#define WPR_ACL_YAML_H
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <cyaml/cyaml.h>
 
-#include "ppr_acl.h"   
-#include "ppr_acl_db.h" 
-#include "ppr_ports.h"  
+#include "wpr_acl.h"   
+#include "wpr_acl_db.h" 
+#include "wpr_ports.h"  
 
 typedef struct {
     char       *default_policy;   // "FORWARD" / "DROP" / etc.
-} ppr_yaml_acl_action_t;
+} wpr_yaml_acl_action_t;
 
 typedef struct {
     char  *tenant_ids;
@@ -28,8 +28,8 @@ typedef struct {
 
     int32_t  priority;
 
-    ppr_yaml_acl_action_t action;
-} ppr_yaml_acl_ip4_rule_t;
+    wpr_yaml_acl_action_t action;
+} wpr_yaml_acl_ip4_rule_t;
 
 typedef struct {
     char    *tenant_ids;
@@ -46,8 +46,8 @@ typedef struct {
 
     int32_t  priority;
 
-    ppr_yaml_acl_action_t action;
-} ppr_yaml_acl_ip6_rule_t;
+    wpr_yaml_acl_action_t action;
+} wpr_yaml_acl_ip6_rule_t;
 
 typedef struct {
     char    *tenant_ids;
@@ -59,33 +59,33 @@ typedef struct {
     char    *dst_mac;
     int32_t  priority;
 
-    ppr_yaml_acl_action_t action;
-} ppr_yaml_acl_l2_rule_t;
+    wpr_yaml_acl_action_t action;
+} wpr_yaml_acl_l2_rule_t;
 
 typedef struct {
-    ppr_yaml_acl_ip4_rule_t *ip4;
+    wpr_yaml_acl_ip4_rule_t *ip4;
     uint32_t                  ip4_count;
 
-    ppr_yaml_acl_ip6_rule_t *ip6;
+    wpr_yaml_acl_ip6_rule_t *ip6;
     uint32_t                 ip6_count;
 
-    ppr_yaml_acl_l2_rule_t  *l2;
+    wpr_yaml_acl_l2_rule_t  *l2;
     uint32_t                 l2_count;
-} ppr_yaml_acl_rules_t;
+} wpr_yaml_acl_rules_t;
 
 typedef struct {
     char *pcap_filepath;   // "/path/to/file.pcap"
-} ppr_yaml_template_t;
+} wpr_yaml_template_t;
 
 typedef struct {
-    ppr_yaml_template_t  template;
-    ppr_yaml_acl_rules_t rules;
-} ppr_yaml_acl_root_t;
+    wpr_yaml_template_t  template;
+    wpr_yaml_acl_rules_t rules;
+} wpr_yaml_acl_root_t;
 
 /* Main entrypoint: parse file, add rules into db. */
-int ppr_acl_load_startup_file(const char *path,
-                              ppr_acl_rule_db_t *db,
-                              ppr_ports_t *global_port_list,
+int wpr_acl_load_startup_file(const char *path,
+                              wpr_acl_rule_db_t *db,
+                              wpr_ports_t *global_port_list,
                               char **pcap_template_out);
 
-#endif /* PPR_ACL_YAML_H */
+#endif /* WPR_ACL_YAML_H */

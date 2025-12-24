@@ -5,7 +5,7 @@
 #include <rte_mbuf_dyn.h>
 #include <rte_log.h> 
 #include <rte_common.h>
-#include "ppr_mbuf_fields.h"
+#include "wpr_mbuf_fields.h"
 
 void init_mbuf_tstamps(int *offset) {
     const struct rte_mbuf_dynfield my_desc = {

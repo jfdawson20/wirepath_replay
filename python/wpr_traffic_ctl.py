@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-ppr_traffic_ctl.py - Friendly Python wrapper for PPR Traffic / PCAP replay JSON-RPC API.
+wpr_traffic_ctl.py - Friendly Python wrapper for WPR Traffic / PCAP replay JSON-RPC API.
 
-This mirrors the style of your ppr_acl.py and uses WpsControlClient from ppr_cli.py.
+This mirrors the style of your wpr_acl.py and uses WpsControlClient from wpr_cli.py.
 
 Commands implemented (from your C RPC table):
-  - ppr_get_loaded_pcaps_list
-  - ppr_load_pcap_file
-  - ppr_assign_port_slot
-  - ppr_cmd_get_port_list
-  - ppr_port_tx_ctl
+  - wpr_get_loaded_pcaps_list
+  - wpr_load_pcap_file
+  - wpr_assign_port_slot
+  - wpr_cmd_get_port_list
+  - wpr_port_tx_ctl
 """
 
 from __future__ import annotations
@@ -20,21 +20,21 @@ from typing import Any, Dict, List, Optional
 
 from prettytable import PrettyTable
 
-from ppr_cli import WpsControlClient, WpsControlError  # adjust path if needed
+from wpr_cli import WpsControlClient, WpsControlError  # adjust path if needed
 
 
 # ---------------------------------------------------------------------------
 # Wire command names
 # ---------------------------------------------------------------------------
 
-CMD_GET_LOADED_PCAPS_LIST = "ppr_get_loaded_pcaps_list"
-CMD_LOAD_PCAP_FILE = "ppr_load_pcap_file"
-CMD_ASSIGN_PORT_SLOT = "ppr_assign_port_slot"
+CMD_GET_LOADED_PCAPS_LIST = "wpr_get_loaded_pcaps_list"
+CMD_LOAD_PCAP_FILE = "wpr_load_pcap_file"
+CMD_ASSIGN_PORT_SLOT = "wpr_assign_port_slot"
 
-CMD_GET_PORT_LIST = "ppr_cmd_get_port_list"
-CMD_PORT_TX_CTL = "ppr_port_tx_ctl"
+CMD_GET_PORT_LIST = "wpr_cmd_get_port_list"
+CMD_PORT_TX_CTL = "wpr_port_tx_ctl"
 
-CMD_SET_PORT_STREAM_VCS = "ppr_set_port_stream_vcs"
+CMD_SET_PORT_STREAM_VCS = "wpr_set_port_stream_vcs"
 
 
 
@@ -372,7 +372,7 @@ def display_generic_reply(title: str, reply: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="PPR Traffic / PCAP replay control client")
+    p = argparse.ArgumentParser(description="WPR Traffic / PCAP replay control client")
 
     p.add_argument("-p", "--port", type=int, default=9000, help="RPC Server Port")
     p.add_argument("-i", "--hostip", type=str, default="localhost", help="RPC Server Address")

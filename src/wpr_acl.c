@@ -2,13 +2,13 @@
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2025
  *
-Filename: ppr_acl.c
+Filename: wpr_acl.c
 Description: This file implements a L2/L3 packet classification / access control list (ACL) built in top of the DPDK rtc_acl library.
-the ppr_acl API contains all the logic to initialize, load, and query ACL rule sets for both IPv4/IPv6 and L2 (MAC address based) flow keys. At its core, 
-the rte_acl library handles compiling and optimizing the rule sets into high performance lookup structures. The ppr_acl API wraps this library to provide:
+the wpr_acl API contains all the logic to initialize, load, and query ACL rule sets for both IPv4/IPv6 and L2 (MAC address based) flow keys. At its core, 
+the rte_acl library handles compiling and optimizing the rule sets into high performance lookup structures. The wpr_acl API wraps this library to provide:
 - A per-socket runtime structure with current ACL contexts + epoch
 - A build context for off-path ACL compilation and QSBR-safe swapping
-- Simple classify APIs taking ppr key structs
+- Simple classify APIs taking wpr key structs
 
 A few notes important to understanding the design:
 - The ACL rule sets are designed to be rebuilt and swapped at runtime without blocking packet processing. Once an ACL context is built it can't be modified, 
@@ -16,22 +16,22 @@ A few notes important to understanding the design:
 
 - while flow keys are defined in other parts of the codebase, the ACL keys used for classification are defined internally here to match the fields needed for ACL
   rules. ACl keys are expected to be flat, packed structs since the ACL engine does raw byte level compares when searching for a match. 
-  Conversion functions are provided to convert from ppr_flow_key_t and ppr_l2_flow_key_t to the internal ACL key formats.
+  Conversion functions are provided to convert from wpr_flow_key_t and wpr_l2_flow_key_t to the internal ACL key formats.
 
 - Three separate rte_acl contexts are maintained per-socket: one for IPv4 rules, one for IPv6 rules, and one for L2 (non-IP) rules. This allows 
   us to optimize each context for the specific key types and fields used. Each context has its own build and runtime structures. When performing classification 
   lookups, the user must handle determining which bucket (IPv4, IPv6, L2) to use based on the flow key parsing prior to lookup. 
 
-- the ppr_acl api utilizes two mirrored structures (runtime and build contexts) to manage the ACL rule sets. The runtime context is used by packet processing 
+- the wpr_acl api utilizes two mirrored structures (runtime and build contexts) to manage the ACL rule sets. The runtime context is used by packet processing 
   threads to perform lookups, while the build context is used off-path to compile new rule sets. When a new rule set is ready, 
   it is swapped into the runtime context using RCU mechanisms to ensure safe concurrent access. The main difference between these structs is that the build 
   context contains temporary storage for rules being compiled, while the runtime context contains atomic pointers to the active rte_acl_ctx structures.
 
-- typically the user should not directly access this API beyond initialization and classification calls. the ppr_acl_db module provides a higher level interface
+- typically the user should not directly access this API beyond initialization and classification calls. the wpr_acl_db module provides a higher level interface
   for managing ACL rule sets,including building, swapping, and maintaining epochs for flow table entries.
 
 Note on edianess / convention. Since the underlying rte_acl library perform most opertions using byte level comparisons, its pretty particular about the format 
-of keys and rules. The ppr_acl module follows these conventions closely to avoid unnecessary conversions or copies. Specifically, all rules created are expected 
+of keys and rules. The wpr_acl module follows these conventions closely to avoid unnecessary conversions or copies. Specifically, all rules created are expected 
 to be in host byte order while all lookup keys are expected to be in network byte order. The rte_acl library handles any necessary conversions internally during 
 lookups.
 - related to this, the rte_acl library is particular about field offsets and sizes when defining rules. tread carefully if you want to modify the rule field 
@@ -39,7 +39,7 @@ lookups.
  */
 
 
-#include "ppr_acl.h"
+#include "wpr_acl.h"
 
 #include <string.h>
 #include <arpa/inet.h>
@@ -53,54 +53,54 @@ lookups.
 //the enums below define the field indices for IPv4, IPv6, and L2 ACL keys respectively.
 
 //ipv4
-typedef enum ppr_acl_ip4_fields {
-    PPR_ACL_IP4_FIELD_PROTO = 0,     
-    PPR_ACL_IP4_FIELD_SRC_IP,        
-    PPR_ACL_IP4_FIELD_DST_IP,         
-    PPR_ACL_IP4_FIELD_SRC_PORT,     
-    PPR_ACL_IP4_FIELD_DST_PORT,     
-    PPR_ACL_IP4_FIELD_TENANT,        
-    PPR_ACL_IP4_FIELD_IN_PORT,         
-    PPR_ACL_IP4_NUM_FIELDS
-} ppr_acl_ip4_fields_t;
+typedef enum wpr_acl_ip4_fields {
+    WPR_ACL_IP4_FIELD_PROTO = 0,     
+    WPR_ACL_IP4_FIELD_SRC_IP,        
+    WPR_ACL_IP4_FIELD_DST_IP,         
+    WPR_ACL_IP4_FIELD_SRC_PORT,     
+    WPR_ACL_IP4_FIELD_DST_PORT,     
+    WPR_ACL_IP4_FIELD_TENANT,        
+    WPR_ACL_IP4_FIELD_IN_PORT,         
+    WPR_ACL_IP4_NUM_FIELDS
+} wpr_acl_ip4_fields_t;
 
 //ipv6
-typedef enum ppr_acl_ip6_fields {
-    PPR_ACL_IP6_FIELD_PROTO = 0,
+typedef enum wpr_acl_ip6_fields {
+    WPR_ACL_IP6_FIELD_PROTO = 0,
 
-    PPR_ACL_IP6_FIELD_SRC_IP0,
-    PPR_ACL_IP6_FIELD_SRC_IP1,
-    PPR_ACL_IP6_FIELD_SRC_IP2,
-    PPR_ACL_IP6_FIELD_SRC_IP3,
+    WPR_ACL_IP6_FIELD_SRC_IP0,
+    WPR_ACL_IP6_FIELD_SRC_IP1,
+    WPR_ACL_IP6_FIELD_SRC_IP2,
+    WPR_ACL_IP6_FIELD_SRC_IP3,
 
-    PPR_ACL_IP6_FIELD_DST_IP0,
-    PPR_ACL_IP6_FIELD_DST_IP1,
-    PPR_ACL_IP6_FIELD_DST_IP2,
-    PPR_ACL_IP6_FIELD_DST_IP3,
+    WPR_ACL_IP6_FIELD_DST_IP0,
+    WPR_ACL_IP6_FIELD_DST_IP1,
+    WPR_ACL_IP6_FIELD_DST_IP2,
+    WPR_ACL_IP6_FIELD_DST_IP3,
 
-    PPR_ACL_IP6_FIELD_SRC_PORT,
-    PPR_ACL_IP6_FIELD_DST_PORT,
+    WPR_ACL_IP6_FIELD_SRC_PORT,
+    WPR_ACL_IP6_FIELD_DST_PORT,
     
-    PPR_ACL_IP6_FIELD_TENANT,
-    PPR_ACL_IP6_FIELD_IN_PORT,
+    WPR_ACL_IP6_FIELD_TENANT,
+    WPR_ACL_IP6_FIELD_IN_PORT,
 
-    PPR_ACL_IP6_NUM_FIELDS
-} ppr_acl_ip6_fields_t;
+    WPR_ACL_IP6_NUM_FIELDS
+} wpr_acl_ip6_fields_t;
     
 //l2
-typedef enum ppr_acl_l2_fields {
-    PPR_ACL_L2_FIELD_TAG = 0,
-    PPR_ACL_L2_FIELD_TENANT,
-    PPR_ACL_L2_FIELD_OUTER_VLAN,
-    PPR_ACL_L2_FIELD_INNER_VLAN,
-    PPR_ACL_L2_FIELD_ETHER_TYPE,
-    PPR_ACL_L2_FIELD_IN_PORT,
-    PPR_ACL_L2_FIELD_SRC_MAC_HI,
-    PPR_ACL_L2_FIELD_DST_MAC_HI,
-    PPR_ACL_L2_FIELD_SRC_MAC_LO,
-    PPR_ACL_L2_FIELD_DST_MAC_LO,
-    PPR_ACL_L2_NUM_FIELDS
-} ppr_acl_l2_fields_t;
+typedef enum wpr_acl_l2_fields {
+    WPR_ACL_L2_FIELD_TAG = 0,
+    WPR_ACL_L2_FIELD_TENANT,
+    WPR_ACL_L2_FIELD_OUTER_VLAN,
+    WPR_ACL_L2_FIELD_INNER_VLAN,
+    WPR_ACL_L2_FIELD_ETHER_TYPE,
+    WPR_ACL_L2_FIELD_IN_PORT,
+    WPR_ACL_L2_FIELD_SRC_MAC_HI,
+    WPR_ACL_L2_FIELD_DST_MAC_HI,
+    WPR_ACL_L2_FIELD_SRC_MAC_LO,
+    WPR_ACL_L2_FIELD_DST_MAC_LO,
+    WPR_ACL_L2_NUM_FIELDS
+} wpr_acl_l2_fields_t;
 
 
 //the following structs define the internal ACL key formats used for rule creation and lookups. the rte_acl library is particular about how fields 
@@ -108,7 +108,7 @@ typedef enum ppr_acl_l2_fields {
 //the field offsets used later int he field definitions must match these structs exactly.
 
 //ipv4 internal key format
-typedef struct ppr_acl_ip4_key_internal {
+typedef struct wpr_acl_ip4_key_internal {
     uint8_t  proto;
     uint8_t  pad0[3];      // offset 0
     uint32_t src_ip;       // offset 4 (word 1)
@@ -117,12 +117,12 @@ typedef struct ppr_acl_ip4_key_internal {
     uint32_t dst_port;     // offset 16 (word 4)
     uint32_t tenant_id;    // offset 20 (word 5)
     uint32_t in_port;      // offset 24 (word 6)
-} __rte_packed ppr_acl_ip4_key_internal_t;
+} __rte_packed wpr_acl_ip4_key_internal_t;
 
 
 
 //ipv6 internal key format
-typedef struct ppr_acl_ip6_key_internal {
+typedef struct wpr_acl_ip6_key_internal {
     uint8_t  proto;
     uint8_t  pad0[3];
 
@@ -134,10 +134,10 @@ typedef struct ppr_acl_ip6_key_internal {
     uint32_t tenant_id;
     uint32_t in_port;
 
-} __rte_packed ppr_acl_ip6_key_internal_t;
+} __rte_packed wpr_acl_ip6_key_internal_t;
 
 
-typedef struct ppr_acl_l2_key_internal {
+typedef struct wpr_acl_l2_key_internal {
     uint8_t  l2_tag;
     uint8_t  pad0[3];
 
@@ -154,7 +154,7 @@ typedef struct ppr_acl_l2_key_internal {
 
     uint32_t src_mac_lo;
     uint32_t dst_mac_lo;
-} __rte_packed ppr_acl_l2_key_internal_t;
+} __rte_packed wpr_acl_l2_key_internal_t;
 
 
 //The following arrays define the field definitions used by the rte_acl library for each ACL key type. these definitions specify the type, size, offset,
@@ -164,246 +164,246 @@ typedef struct ppr_acl_l2_key_internal {
 //note - input_index specifies which input word the field is located in. the rte_acl library processes keys in 32-bit words, so fields must be mapped accordingly.
 
 //IPv4 field definitions
-static const struct rte_acl_field_def ppr_acl_ip4_defs[PPR_ACL_IP4_NUM_FIELDS] = {
-    [PPR_ACL_IP4_FIELD_PROTO] = {
+static const struct rte_acl_field_def wpr_acl_ip4_defs[WPR_ACL_IP4_NUM_FIELDS] = {
+    [WPR_ACL_IP4_FIELD_PROTO] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint8_t),
-        .field_index = PPR_ACL_IP4_FIELD_PROTO,
+        .field_index = WPR_ACL_IP4_FIELD_PROTO,
         .input_index = 0,
-        .offset      = offsetof(ppr_acl_ip4_key_internal_t, proto),
+        .offset      = offsetof(wpr_acl_ip4_key_internal_t, proto),
     },
-    [PPR_ACL_IP4_FIELD_SRC_IP] = {
+    [WPR_ACL_IP4_FIELD_SRC_IP] = {
         .type        = RTE_ACL_FIELD_TYPE_MASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP4_FIELD_SRC_IP,
+        .field_index = WPR_ACL_IP4_FIELD_SRC_IP,
         .input_index = 1,
-        .offset      = offsetof(ppr_acl_ip4_key_internal_t, src_ip),
+        .offset      = offsetof(wpr_acl_ip4_key_internal_t, src_ip),
     },
-    [PPR_ACL_IP4_FIELD_DST_IP] = {
+    [WPR_ACL_IP4_FIELD_DST_IP] = {
         .type        = RTE_ACL_FIELD_TYPE_MASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP4_FIELD_DST_IP,
+        .field_index = WPR_ACL_IP4_FIELD_DST_IP,
         .input_index = 2,
-        .offset      = offsetof(ppr_acl_ip4_key_internal_t, dst_ip),
+        .offset      = offsetof(wpr_acl_ip4_key_internal_t, dst_ip),
     },
-    [PPR_ACL_IP4_FIELD_SRC_PORT] = {
+    [WPR_ACL_IP4_FIELD_SRC_PORT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP4_FIELD_SRC_PORT,
+        .field_index = WPR_ACL_IP4_FIELD_SRC_PORT,
         .input_index = 3,
-        .offset      = offsetof(ppr_acl_ip4_key_internal_t, src_port),
+        .offset      = offsetof(wpr_acl_ip4_key_internal_t, src_port),
     },
-    [PPR_ACL_IP4_FIELD_DST_PORT] = {
+    [WPR_ACL_IP4_FIELD_DST_PORT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP4_FIELD_DST_PORT,
+        .field_index = WPR_ACL_IP4_FIELD_DST_PORT,
         .input_index = 4,
-        .offset      = offsetof(ppr_acl_ip4_key_internal_t, dst_port),
+        .offset      = offsetof(wpr_acl_ip4_key_internal_t, dst_port),
     },
-    [PPR_ACL_IP4_FIELD_TENANT] = {
+    [WPR_ACL_IP4_FIELD_TENANT] = {
         . type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP4_FIELD_TENANT,
+        .field_index = WPR_ACL_IP4_FIELD_TENANT,
         .input_index = 5,
-        .offset      = offsetof(ppr_acl_ip4_key_internal_t, tenant_id),
+        .offset      = offsetof(wpr_acl_ip4_key_internal_t, tenant_id),
     },
-    [PPR_ACL_IP4_FIELD_IN_PORT] = {
+    [WPR_ACL_IP4_FIELD_IN_PORT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP4_FIELD_IN_PORT,
+        .field_index = WPR_ACL_IP4_FIELD_IN_PORT,
         . input_index = 6,
-        . offset      = offsetof(ppr_acl_ip4_key_internal_t, in_port),
+        . offset      = offsetof(wpr_acl_ip4_key_internal_t, in_port),
     },
 };
 
 //ipv6 field definitions
-static const struct rte_acl_field_def ppr_acl_ip6_defs[PPR_ACL_IP6_NUM_FIELDS] = {
+static const struct rte_acl_field_def wpr_acl_ip6_defs[WPR_ACL_IP6_NUM_FIELDS] = {
 
     /* Proto: byte in word 0 */
-    [PPR_ACL_IP6_FIELD_PROTO] = {
+    [WPR_ACL_IP6_FIELD_PROTO] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint8_t),
-        .field_index = PPR_ACL_IP6_FIELD_PROTO,
+        .field_index = WPR_ACL_IP6_FIELD_PROTO,
         .input_index = 0,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, proto),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, proto),
     },
 
     /* src IPv6: four MASK fields of 32 bits each (words 1–4) */
-    [PPR_ACL_IP6_FIELD_SRC_IP0] = {
+    [WPR_ACL_IP6_FIELD_SRC_IP0] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_SRC_IP0,
+        .field_index = WPR_ACL_IP6_FIELD_SRC_IP0,
         .input_index = 1,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, src_ip[0]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, src_ip[0]),
     },
-    [PPR_ACL_IP6_FIELD_SRC_IP1] = {
+    [WPR_ACL_IP6_FIELD_SRC_IP1] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_SRC_IP1,
+        .field_index = WPR_ACL_IP6_FIELD_SRC_IP1,
         .input_index = 2,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, src_ip[1]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, src_ip[1]),
     },
-    [PPR_ACL_IP6_FIELD_SRC_IP2] = {
+    [WPR_ACL_IP6_FIELD_SRC_IP2] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_SRC_IP2,
+        .field_index = WPR_ACL_IP6_FIELD_SRC_IP2,
         .input_index = 3,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, src_ip[2]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, src_ip[2]),
     },
-    [PPR_ACL_IP6_FIELD_SRC_IP3] = {
+    [WPR_ACL_IP6_FIELD_SRC_IP3] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_SRC_IP3,
+        .field_index = WPR_ACL_IP6_FIELD_SRC_IP3,
         .input_index = 4,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, src_ip[3]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, src_ip[3]),
     },
 
     /* dst IPv6: four MASK fields of 32 bits each (words 5–8) */
-    [PPR_ACL_IP6_FIELD_DST_IP0] = {
+    [WPR_ACL_IP6_FIELD_DST_IP0] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_DST_IP0,
+        .field_index = WPR_ACL_IP6_FIELD_DST_IP0,
         .input_index = 5,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, dst_ip[0]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, dst_ip[0]),
     },
-    [PPR_ACL_IP6_FIELD_DST_IP1] = {
+    [WPR_ACL_IP6_FIELD_DST_IP1] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_DST_IP1,
+        .field_index = WPR_ACL_IP6_FIELD_DST_IP1,
         .input_index = 6,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, dst_ip[1]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, dst_ip[1]),
     },
-    [PPR_ACL_IP6_FIELD_DST_IP2] = {
+    [WPR_ACL_IP6_FIELD_DST_IP2] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_DST_IP2,
+        .field_index = WPR_ACL_IP6_FIELD_DST_IP2,
         .input_index = 7,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, dst_ip[2]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, dst_ip[2]),
     },
-    [PPR_ACL_IP6_FIELD_DST_IP3] = {
+    [WPR_ACL_IP6_FIELD_DST_IP3] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_DST_IP3,
+        .field_index = WPR_ACL_IP6_FIELD_DST_IP3,
         .input_index = 8,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, dst_ip[3]),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, dst_ip[3]),
     },
 
     /* Ports live in word 9 */
-    [PPR_ACL_IP6_FIELD_SRC_PORT] = {
+    [WPR_ACL_IP6_FIELD_SRC_PORT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_IP6_FIELD_SRC_PORT,
+        .field_index = WPR_ACL_IP6_FIELD_SRC_PORT,
         .input_index = 9,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, src_port),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, src_port),
     },
-    [PPR_ACL_IP6_FIELD_DST_PORT] = {
+    [WPR_ACL_IP6_FIELD_DST_PORT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_IP6_FIELD_DST_PORT,
+        .field_index = WPR_ACL_IP6_FIELD_DST_PORT,
         .input_index = 9,  /* same 32-bit word as src_port */
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, dst_port),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, dst_port),
     },
 
     /* tenant_id: word 10 */
-    [PPR_ACL_IP6_FIELD_TENANT] = {
+    [WPR_ACL_IP6_FIELD_TENANT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_TENANT,
+        .field_index = WPR_ACL_IP6_FIELD_TENANT,
         .input_index = 10,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, tenant_id),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, tenant_id),
     },
 
     /* in_port: word 11 */
-    [PPR_ACL_IP6_FIELD_IN_PORT] = {
+    [WPR_ACL_IP6_FIELD_IN_PORT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_IP6_FIELD_IN_PORT,
+        .field_index = WPR_ACL_IP6_FIELD_IN_PORT,
         .input_index = 11,
-        .offset      = offsetof(ppr_acl_ip6_key_internal_t, in_port),
+        .offset      = offsetof(wpr_acl_ip6_key_internal_t, in_port),
     },
 };
 
 
-static const struct rte_acl_field_def ppr_acl_l2_defs[PPR_ACL_L2_NUM_FIELDS] = {
-    [PPR_ACL_L2_FIELD_TAG] = {
+static const struct rte_acl_field_def wpr_acl_l2_defs[WPR_ACL_L2_NUM_FIELDS] = {
+    [WPR_ACL_L2_FIELD_TAG] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint8_t),
-        .field_index = PPR_ACL_L2_FIELD_TAG,
+        .field_index = WPR_ACL_L2_FIELD_TAG,
         .input_index = 0,
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, l2_tag),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, l2_tag),
     },
-    [PPR_ACL_L2_FIELD_TENANT] = {
+    [WPR_ACL_L2_FIELD_TENANT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_L2_FIELD_TENANT,
+        .field_index = WPR_ACL_L2_FIELD_TENANT,
         .input_index = 1, // word1
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, tenant_id),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, tenant_id),
     },
-    [PPR_ACL_L2_FIELD_OUTER_VLAN] = {
+    [WPR_ACL_L2_FIELD_OUTER_VLAN] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_L2_FIELD_OUTER_VLAN,
+        .field_index = WPR_ACL_L2_FIELD_OUTER_VLAN,
         .input_index = 2, // word2
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, outer_vlan),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, outer_vlan),
     },
-    [PPR_ACL_L2_FIELD_INNER_VLAN] = {
+    [WPR_ACL_L2_FIELD_INNER_VLAN] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_L2_FIELD_INNER_VLAN,
+        .field_index = WPR_ACL_L2_FIELD_INNER_VLAN,
         .input_index = 2, // same word2
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, inner_vlan),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, inner_vlan),
     },
-    [PPR_ACL_L2_FIELD_ETHER_TYPE] = {
+    [WPR_ACL_L2_FIELD_ETHER_TYPE] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_L2_FIELD_ETHER_TYPE,
+        .field_index = WPR_ACL_L2_FIELD_ETHER_TYPE,
         .input_index = 3, // word3
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, ether_type),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, ether_type),
     },
-    [PPR_ACL_L2_FIELD_IN_PORT] = {
+    [WPR_ACL_L2_FIELD_IN_PORT] = {
         .type        = RTE_ACL_FIELD_TYPE_RANGE,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_L2_FIELD_IN_PORT,
+        .field_index = WPR_ACL_L2_FIELD_IN_PORT,
         .input_index = 3, // same word3
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, in_port),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, in_port),
     },  
-    [PPR_ACL_L2_FIELD_SRC_MAC_HI] = {
+    [WPR_ACL_L2_FIELD_SRC_MAC_HI] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_L2_FIELD_SRC_MAC_HI,
+        .field_index = WPR_ACL_L2_FIELD_SRC_MAC_HI,
         .input_index = 4, // word4
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, src_mac_hi),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, src_mac_hi),
     },
-    [PPR_ACL_L2_FIELD_DST_MAC_HI] = {
+    [WPR_ACL_L2_FIELD_DST_MAC_HI] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint16_t),
-        .field_index = PPR_ACL_L2_FIELD_DST_MAC_HI,
+        .field_index = WPR_ACL_L2_FIELD_DST_MAC_HI,
         .input_index = 4, // same word4
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, dst_mac_hi),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, dst_mac_hi),
     },
-    [PPR_ACL_L2_FIELD_SRC_MAC_LO] = {
+    [WPR_ACL_L2_FIELD_SRC_MAC_LO] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_L2_FIELD_SRC_MAC_LO,
+        .field_index = WPR_ACL_L2_FIELD_SRC_MAC_LO,
         .input_index = 5, // word5 (20–23)
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, src_mac_lo),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, src_mac_lo),
     },
-    [PPR_ACL_L2_FIELD_DST_MAC_LO] = {
+    [WPR_ACL_L2_FIELD_DST_MAC_LO] = {
         .type        = RTE_ACL_FIELD_TYPE_BITMASK,
         .size        = sizeof(uint32_t),
-        .field_index = PPR_ACL_L2_FIELD_DST_MAC_LO,
+        .field_index = WPR_ACL_L2_FIELD_DST_MAC_LO,
         .input_index = 6, // word6 (24–27)
-        .offset      = offsetof(ppr_acl_l2_key_internal_t, dst_mac_lo),
+        .offset      = offsetof(wpr_acl_l2_key_internal_t, dst_mac_lo),
     },
 
 };
 
-_Static_assert(offsetof(ppr_acl_l2_key_internal_t, ether_type) == 12, "ether_type offset mismatch");
-_Static_assert(offsetof(ppr_acl_l2_key_internal_t, in_port)    == 14, "in_port offset mismatch");
-_Static_assert(offsetof(ppr_acl_l2_key_internal_t, src_mac_hi) == 16, "src_mac_hi offset mismatch");
-_Static_assert(offsetof(ppr_acl_l2_key_internal_t, dst_mac_hi) == 18, "dst_mac_hi offset mismatch");
-_Static_assert(offsetof(ppr_acl_l2_key_internal_t, src_mac_lo) == 20, "src_mac_lo offset mismatch");
-_Static_assert(offsetof(ppr_acl_l2_key_internal_t, dst_mac_lo) == 24, "dst_mac_lo offset mismatch");
+_Static_assert(offsetof(wpr_acl_l2_key_internal_t, ether_type) == 12, "ether_type offset mismatch");
+_Static_assert(offsetof(wpr_acl_l2_key_internal_t, in_port)    == 14, "in_port offset mismatch");
+_Static_assert(offsetof(wpr_acl_l2_key_internal_t, src_mac_hi) == 16, "src_mac_hi offset mismatch");
+_Static_assert(offsetof(wpr_acl_l2_key_internal_t, dst_mac_hi) == 18, "dst_mac_hi offset mismatch");
+_Static_assert(offsetof(wpr_acl_l2_key_internal_t, src_mac_lo) == 20, "src_mac_lo offset mismatch");
+_Static_assert(offsetof(wpr_acl_l2_key_internal_t, dst_mac_lo) == 24, "dst_mac_lo offset mismatch");
 
 
 
@@ -417,12 +417,12 @@ _Static_assert(offsetof(ppr_acl_l2_key_internal_t, dst_mac_lo) == 24, "dst_mac_l
 * This is useful for verifying that keys are being constructed correctly and that field definitions match expectations.
 * @param k Pointer to the internal IPv4 ACL key to dump.
 **/
-static void ppr_acl_debug_dump_ip4_key_fields(const ppr_acl_ip4_key_internal_t *k)
+static void wpr_acl_debug_dump_ip4_key_fields(const wpr_acl_ip4_key_internal_t *k)
 {
     const uint8_t *base = (const uint8_t *)k;
 
-    for (int i = 0; i < PPR_ACL_IP4_NUM_FIELDS; i++) {
-        const struct rte_acl_field_def *fd = &ppr_acl_ip4_defs[i];
+    for (int i = 0; i < WPR_ACL_IP4_NUM_FIELDS; i++) {
+        const struct rte_acl_field_def *fd = &wpr_acl_ip4_defs[i];
         const uint8_t *p = base + fd->offset;
 
         char line[128];
@@ -434,7 +434,7 @@ static void ppr_acl_debug_dump_ip4_key_fields(const ppr_acl_ip4_key_internal_t *
             pos += snprintf(line + pos, sizeof(line) - pos,
                             "%02x ", p[b]);
         }
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
     }
 }
 
@@ -443,12 +443,12 @@ static void ppr_acl_debug_dump_ip4_key_fields(const ppr_acl_ip4_key_internal_t *
 * This is useful for verifying that keys are being constructed correctly and that field definitions match expectations.
 * @param k Pointer to the internal IPv6 ACL key to dump.
 **/
-static void ppr_acl_debug_dump_ip6_key_fields(const ppr_acl_ip6_key_internal_t *k)
+static void wpr_acl_debug_dump_ip6_key_fields(const wpr_acl_ip6_key_internal_t *k)
 {
     const uint8_t *base = (const uint8_t *)k;
 
-    for (int i = 0; i < PPR_ACL_IP6_NUM_FIELDS; i++) {
-        const struct rte_acl_field_def *fd = &ppr_acl_ip6_defs[i];
+    for (int i = 0; i < WPR_ACL_IP6_NUM_FIELDS; i++) {
+        const struct rte_acl_field_def *fd = &wpr_acl_ip6_defs[i];
         const uint8_t *p = base + fd->offset;
 
         char line[128];
@@ -460,7 +460,7 @@ static void ppr_acl_debug_dump_ip6_key_fields(const ppr_acl_ip6_key_internal_t *
             pos += snprintf(line + pos, sizeof(line) - pos,
                             "%02x ", p[b]);
         }
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
     }
 }
 
@@ -470,12 +470,12 @@ static void ppr_acl_debug_dump_ip6_key_fields(const ppr_acl_ip6_key_internal_t *
 * This is useful for verifying that keys are being constructed correctly and that field definitions match expectations.
 * @param k Pointer to the internal L2 ACL key to dump.
 **/
-static void ppr_acl_debug_dump_l2_key_fields(const ppr_acl_l2_key_internal_t *k)
+static void wpr_acl_debug_dump_l2_key_fields(const wpr_acl_l2_key_internal_t *k)
 {
     const uint8_t *base = (const uint8_t *)k;
 
-    for (int i = 0; i < PPR_ACL_L2_NUM_FIELDS; i++) {
-        const struct rte_acl_field_def *fd = &ppr_acl_l2_defs[i];
+    for (int i = 0; i < WPR_ACL_L2_NUM_FIELDS; i++) {
+        const struct rte_acl_field_def *fd = &wpr_acl_l2_defs[i];
         const uint8_t *p = base + fd->offset;
 
         char line[128];
@@ -487,15 +487,15 @@ static void ppr_acl_debug_dump_l2_key_fields(const ppr_acl_l2_key_internal_t *k)
             pos += snprintf(line + pos, sizeof(line) - pos,
                             "%02x ", p[b]);
         }
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
     }
 }
 
-void ppr_acl_debug_dump_ip4_rule(const struct rte_acl_rule *r) {
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "IPv4 rule debug dump\n");
-    for (int i = 0; i < PPR_ACL_IP4_NUM_FIELDS; i++) {
+void wpr_acl_debug_dump_ip4_rule(const struct rte_acl_rule *r) {
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "IPv4 rule debug dump\n");
+    for (int i = 0; i < WPR_ACL_IP4_NUM_FIELDS; i++) {
         const struct rte_acl_field *f = &r->field[i];
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
                 " field[%d]: val u32=0x%08x u16=0x%04x u8=0x%02x  "
                 "mask_range u32=%u u16=%u u8=%u\n",
                 i,
@@ -504,11 +504,11 @@ void ppr_acl_debug_dump_ip4_rule(const struct rte_acl_rule *r) {
     }
 }
 
-void ppr_acl_debug_dump_ip6_rule(const struct rte_acl_rule *r) {
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "IPv6 rule debug dump\n");
-    for (int i = 0; i < PPR_ACL_IP6_NUM_FIELDS; i++) {
+void wpr_acl_debug_dump_ip6_rule(const struct rte_acl_rule *r) {
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "IPv6 rule debug dump\n");
+    for (int i = 0; i < WPR_ACL_IP6_NUM_FIELDS; i++) {
         const struct rte_acl_field *f = &r->field[i];
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
                 " field[%d]: val u32=0x%08x u16=0x%04x u8=0x%02x  "
                 "mask_range u32=%u u16=%u u8=%u\n",
                 i,
@@ -517,11 +517,11 @@ void ppr_acl_debug_dump_ip6_rule(const struct rte_acl_rule *r) {
     }
 }
 
-void ppr_acl_debug_dump_l2_rule(const struct rte_acl_rule *r) {
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "L2 rule debug dump\n");
-    for (int i = 0; i < PPR_ACL_L2_NUM_FIELDS; i++) {
+void wpr_acl_debug_dump_l2_rule(const struct rte_acl_rule *r) {
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "L2 rule debug dump\n");
+    for (int i = 0; i < WPR_ACL_L2_NUM_FIELDS; i++) {
         const struct rte_acl_field *f = &r->field[i];
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
                 " field[%d]: val u32=0x%08x u16=0x%04x u8=0x%02x  "
                 "mask_range u32=%u u16=%u u8=%u\n",
                 i,
@@ -537,7 +537,7 @@ void ppr_acl_debug_dump_l2_rule(const struct rte_acl_rule *r) {
 * @param prefix The prefix length of the rule (0-32).
 * @return true if the key_ip matches the rule_ip/prefix, false otherwise.
 **/
-static bool ppr_ip4_addr_matches_host(uint32_t key_ip, uint32_t rule_ip, uint8_t prefix)
+static bool wpr_ip4_addr_matches_host(uint32_t key_ip, uint32_t rule_ip, uint8_t prefix)
 {
     if (prefix == 0)
         return true;
@@ -554,7 +554,7 @@ static bool ppr_ip4_addr_matches_host(uint32_t key_ip, uint32_t rule_ip, uint8_t
 * @param prefix The prefix length of the rule (0-128).
 * @return true if the key_ip matches the rule_ip/prefix, false otherwise.   
 **/
-static bool ppr_ip6_addr_matches_host(const uint32_t key_ip[4],
+static bool wpr_ip6_addr_matches_host(const uint32_t key_ip[4],
                                    const uint32_t rule_ip[4],
                                    uint8_t        prefix)
 {
@@ -586,11 +586,11 @@ static bool ppr_ip6_addr_matches_host(const uint32_t key_ip[4],
 * @param in_port The ingress port number (in host byte order).
 * @return true if the rule matches the flow key and ingress port, false otherwise.
 **/
-bool ppr_acl_ip4_rule_matches_semantic(const ppr_acl_ip4_rule_cfg_t *r,
-                                  const ppr_flow_key_t        *fk,
+bool wpr_acl_ip4_rule_matches_semantic(const wpr_acl_ip4_rule_cfg_t *r,
+                                  const wpr_flow_key_t        *fk,
                                   uint16_t                     in_port)
 {
-    const ppr_flow_key_v4_t *v4 = &fk->ip.v4;
+    const wpr_flow_key_v4_t *v4 = &fk->ip.v4;
 
     // tenant exact match 
     if (fk->tenant_id < r->tenant_id_lo || fk->tenant_id > r->tenant_id_hi)
@@ -601,10 +601,10 @@ bool ppr_acl_ip4_rule_matches_semantic(const ppr_acl_ip4_rule_cfg_t *r,
         return false;
 
     // IPv4 src/dst in host byte order 
-    if (!ppr_ip4_addr_matches_host(v4->src_ip, r->src_ip, r->src_prefix))
+    if (!wpr_ip4_addr_matches_host(v4->src_ip, r->src_ip, r->src_prefix))
         return false;
 
-    if (!ppr_ip4_addr_matches_host(v4->dst_ip, r->dst_ip, r->dst_prefix))
+    if (!wpr_ip4_addr_matches_host(v4->dst_ip, r->dst_ip, r->dst_prefix))
         return false;
 
     // ports in host byte order 
@@ -629,11 +629,11 @@ bool ppr_acl_ip4_rule_matches_semantic(const ppr_acl_ip4_rule_cfg_t *r,
 * @param in_port The ingress port number (in host byte order).
 * @return true if the rule matches the flow key and ingress port, false otherwise.
 **/
-bool ppr_acl_ip6_rule_matches_semantic(const ppr_acl_ip6_rule_cfg_t *r,
-                                  const ppr_flow_key_t        *fk,
+bool wpr_acl_ip6_rule_matches_semantic(const wpr_acl_ip6_rule_cfg_t *r,
+                                  const wpr_flow_key_t        *fk,
                                   uint16_t                     in_port)
 {
-    const ppr_flow_key_v6_t *v6 = &fk->ip.v6;
+    const wpr_flow_key_v6_t *v6 = &fk->ip.v6;
 
     // tenant exact match 
     if (fk->tenant_id < r->tenant_id_lo || fk->tenant_id > r->tenant_id_hi)
@@ -644,10 +644,10 @@ bool ppr_acl_ip6_rule_matches_semantic(const ppr_acl_ip6_rule_cfg_t *r,
         return false;
 
     // IPv6 src/dst in host byte order 
-    if (!ppr_ip6_addr_matches_host((uint32_t *)&v6->src_ip[0], (uint32_t *)&r->src_ip, r->src_prefix))
+    if (!wpr_ip6_addr_matches_host((uint32_t *)&v6->src_ip[0], (uint32_t *)&r->src_ip, r->src_prefix))
         return false;
 
-    if (!ppr_ip6_addr_matches_host((uint32_t *)&v6->dst_ip[0], (uint32_t *)&r->dst_ip, r->dst_prefix))
+    if (!wpr_ip6_addr_matches_host((uint32_t *)&v6->dst_ip[0], (uint32_t *)&r->dst_ip, r->dst_prefix))
         return false;
 
     // ports in host byte order 
@@ -671,8 +671,8 @@ bool ppr_acl_ip6_rule_matches_semantic(const ppr_acl_ip6_rule_cfg_t *r,
 * @param in_port The ingress port number (in host byte order).
 * @return true if the rule matches the flow key and ingress port, false otherwise.
 **/
-bool ppr_acl_l2_rule_matches_semantic(const ppr_acl_l2_rule_cfg_t *r,
-                                 const ppr_l2_flow_key_t     *fk,
+bool wpr_acl_l2_rule_matches_semantic(const wpr_acl_l2_rule_cfg_t *r,
+                                 const wpr_l2_flow_key_t     *fk,
                                  uint16_t                     in_port)
 {
     /* tenant exact match */
@@ -714,7 +714,7 @@ bool ppr_acl_l2_rule_matches_semantic(const ppr_acl_l2_rule_cfg_t *r,
 * @param p Pointer to the memory region to dump.
 * @param len Length of the memory region in bytes.
 **/
-void ppr_acl_hexdump(const char *tag, const void *p, size_t len)
+void wpr_acl_hexdump(const char *tag, const void *p, size_t len)
 {
     const uint8_t *b = (const uint8_t *)p;
     char line[128];
@@ -728,7 +728,7 @@ void ppr_acl_hexdump(const char *tag, const void *p, size_t len)
                             "%02x%s", b[offset + i],
                             (i == 7) ? "  " : " ");
         }
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "%s\n", line);
         offset += 16;
     }
 }
@@ -737,7 +737,7 @@ void ppr_acl_hexdump(const char *tag, const void *p, size_t len)
 * Print an IPv4 ACL rule configuration to the log for debugging.
 * @param r Pointer to the IPv4 ACL rule configuration to print.
 **/
-void ppr_acl_print_ip4_rule(const ppr_acl_ip4_rule_cfg_t *r)
+void wpr_acl_print_ip4_rule(const wpr_acl_ip4_rule_cfg_t *r)
 {
     if (!r)
         return;
@@ -747,18 +747,18 @@ void ppr_acl_print_ip4_rule(const ppr_acl_ip4_rule_cfg_t *r)
     struct in_addr ina;
 
     //print raw ip addresses 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "Raw IPs: src=0x%08x dst=0x%08x\n", r->src_ip, r->dst_ip);
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "Raw IPs: src=0x%08x dst=0x%08x\n", r->src_ip, r->dst_ip);
     ina.s_addr = htonl(r->src_ip);
     inet_ntop(AF_INET, &ina, src_buf, sizeof(src_buf));
     
     ina.s_addr = htonl(r->dst_ip);
     inet_ntop(AF_INET, &ina, dst_buf, sizeof(dst_buf));
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "ACL IPv4 rule: id=%u tenant=%u/%u priority=%d\n",
             r->rule_id, r->tenant_id_lo, r->tenant_id_hi, r->priority);
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "    match: %s/%u:%u-%u -> %s/%u:%u-%u proto=%s(%u)\n",
             src_buf, r->src_prefix,
             r->src_port_lo,
@@ -766,20 +766,20 @@ void ppr_acl_print_ip4_rule(const ppr_acl_ip4_rule_cfg_t *r)
             dst_buf, r->dst_prefix,
             r->dst_port_lo,
             r->dst_port_hi,
-            ppr_proto_to_str(r->proto), r->proto);
+            wpr_proto_to_str(r->proto), r->proto);
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "    ingress_ports: %u-%u\n",
             r->in_port_lo, r->in_port_hi);
 
-    ppr_acl_print_action(&r->action);
+    wpr_acl_print_action(&r->action);
 }
 
 /** 
 * Print an IPv6 ACL rule configuration to the log for debugging.
 * @param r Pointer to the IPv6 ACL rule configuration to print. 
 **/
-void ppr_acl_print_ip6_rule(const ppr_acl_ip6_rule_cfg_t *r)
+void wpr_acl_print_ip6_rule(const wpr_acl_ip6_rule_cfg_t *r)
 {
     if (!r)
         return;
@@ -794,11 +794,11 @@ void ppr_acl_print_ip6_rule(const ppr_acl_ip6_rule_cfg_t *r)
     memcpy(&in6, r->dst_ip, sizeof(in6));
     inet_ntop(AF_INET6, &in6, dst_buf, sizeof(dst_buf));
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "ACL IPv6 rule: id=%u tenant=%u/%u priority=%d\n",
             r->rule_id, r->tenant_id_lo, r->tenant_id_hi, r->priority);
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "    match: %s/%u:%u-%u -> %s/%u:%u-%u proto=%s(%u)\n",
             src_buf, r->src_prefix,
             r->src_port_lo,
@@ -806,13 +806,13 @@ void ppr_acl_print_ip6_rule(const ppr_acl_ip6_rule_cfg_t *r)
             dst_buf, r->dst_prefix,
             r->dst_port_lo,
             r->dst_port_hi,
-            ppr_proto_to_str(r->proto), r->proto);
+            wpr_proto_to_str(r->proto), r->proto);
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "    ingress_ports: %u-%u\n",
             r->in_port_lo, r->in_port_hi);
 
-    ppr_acl_print_action(&r->action);
+    wpr_acl_print_action(&r->action);
 }
 
 
@@ -820,7 +820,7 @@ void ppr_acl_print_ip6_rule(const ppr_acl_ip6_rule_cfg_t *r)
 * Print an L2 ACL rule configuration to the log for debugging.
 * @param r Pointer to the L2 ACL rule configuration to print.
 **/
-void ppr_acl_print_l2_rule(const ppr_acl_l2_rule_cfg_t *r)
+void wpr_acl_print_l2_rule(const wpr_acl_l2_rule_cfg_t *r)
 {
     if (!r)
         return;
@@ -828,40 +828,40 @@ void ppr_acl_print_l2_rule(const ppr_acl_l2_rule_cfg_t *r)
     char src_mac[32];
     char dst_mac[32];
 
-    ppr_format_mac(&r->src_mac, src_mac, sizeof(src_mac));
-    ppr_format_mac(&r->dst_mac, dst_mac, sizeof(dst_mac));
+    wpr_format_mac(&r->src_mac, src_mac, sizeof(src_mac));
+    wpr_format_mac(&r->dst_mac, dst_mac, sizeof(dst_mac));
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "ACL L2 rule: id=%u tenant=%u/%u priority=%d\n",
             r->rule_id, r->tenant_id_lo, r->tenant_id_hi, r->priority);
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "    ingress_ports: %u-%u\n",
             r->in_port_lo, r->in_port_hi);
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "    VLANs: outer=%u-%u inner=%u-%u\n",
             r->outer_vlan_lo, r->outer_vlan_hi,
             r->inner_vlan_lo, r->inner_vlan_hi);
 
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "    ether_type: 0x%04x (%s)\n",
-            r->ether_type, ppr_ethertype_to_str(r->ether_type));
+            r->ether_type, wpr_ethertype_to_str(r->ether_type));
 
     if (r->is_mac_match) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
                 "    MAC match: src=%s dst=%s\n",
                 src_mac, dst_mac);
     } else {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
                 "    MAC match: disabled\n");
     }
 
-    ppr_acl_print_action(&r->action);
+    wpr_acl_print_action(&r->action);
 }
 
 
-/*-------------------------------------------- PPR_ACL Helper Functions ----------------------------------------------*/
+/*-------------------------------------------- WPR_ACL Helper Functions ----------------------------------------------*/
 
 /** 
 * Apply an IPv6 prefix length to the ACL fields for masking.
@@ -954,7 +954,7 @@ static void acl_ipv6_rule_fill(const uint8_t be_addr[16],
 * @param n
 *   Number of entries in the array. 
 **/
-static void ppr_acl_ctx_rcu_free(void *arg, void *entries, unsigned int n)
+static void wpr_acl_ctx_rcu_free(void *arg, void *entries, unsigned int n)
 {
     (void)arg; // optional context, ignore if unused
     void **arr = (void **)entries;   // array of pointers, n elements
@@ -975,7 +975,7 @@ static void ppr_acl_ctx_rcu_free(void *arg, void *entries, unsigned int n)
 * @param n
 *   Number of entries in the array.
 **/
-static void ppr_acl_tables_rcu_free(void *arg, void *entries, unsigned int n)
+static void wpr_acl_tables_rcu_free(void *arg, void *entries, unsigned int n)
 {
     (void)arg;
     void **arr = (void **)entries;
@@ -997,7 +997,7 @@ static void ppr_acl_tables_rcu_free(void *arg, void *entries, unsigned int n)
 * @param n
 *   Number of entries in the array.
 **/
-static void ppr_acl_stats_rcu_free(void *arg, void *entries, unsigned int n)
+static void wpr_acl_stats_rcu_free(void *arg, void *entries, unsigned int n)
 {
     (void)arg;
     void **arr = (void **)entries;
@@ -1018,14 +1018,14 @@ static void ppr_acl_stats_rcu_free(void *arg, void *entries, unsigned int n)
 * @return
 *   0 on success, negative errno on failure.
 **/
-static int ppr_acl_retire_ctx(ppr_acl_runtime_t *rt, struct rte_acl_ctx *old_ctx)
+static int wpr_acl_retire_ctx(wpr_acl_runtime_t *rt, struct rte_acl_ctx *old_ctx)
 {
     if (!rt || !old_ctx)
         return -EINVAL;
 
     int ret = rte_rcu_qsbr_dq_enqueue(rt->acl_ctx_qsbr_dq, &old_ctx);
     if (ret != 0) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                 "Failed to enqueue old ACL context for deferred free: %s\n",
                 rte_strerror(-ret));
         return ret;
@@ -1043,14 +1043,14 @@ static int ppr_acl_retire_ctx(ppr_acl_runtime_t *rt, struct rte_acl_ctx *old_ctx
 * @return
 *   0 on success, negative errno on failure.
 **/
-static int ppr_acl_retire_table(ppr_acl_runtime_t *rt, ppr_acl_policy_tables_t *old_tbl)
+static int wpr_acl_retire_table(wpr_acl_runtime_t *rt, wpr_acl_policy_tables_t *old_tbl)
 {
     if (!rt || !old_tbl)
         return -EINVAL;
 
     int ret = rte_rcu_qsbr_dq_enqueue(rt->acl_tables_qsbr_dq, &old_tbl);
     if (ret != 0) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                 "Failed to enqueue old ACL tables for deferred free: %s\n",
                 rte_strerror(-ret));
         return ret;
@@ -1069,14 +1069,14 @@ static int ppr_acl_retire_table(ppr_acl_runtime_t *rt, ppr_acl_policy_tables_t *
 * @return
 *   0 on success, negative errno on failure.    
 **/
-static int ppr_acl_retire_global_stats(ppr_acl_runtime_t *rt, ppr_acl_rule_db_stats_t *old_stats)
+static int wpr_acl_retire_global_stats(wpr_acl_runtime_t *rt, wpr_acl_rule_db_stats_t *old_stats)
 {
     if (!rt || !old_stats)
         return -EINVAL;
 
     int ret = rte_rcu_qsbr_dq_enqueue(rt->acl_stats_qsbr_dq, &old_stats);
     if (ret != 0) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                 "Failed to enqueue old ACL tables for deferred free: %s\n",
                 rte_strerror(-ret));
         return ret;
@@ -1090,12 +1090,12 @@ static int ppr_acl_retire_global_stats(ppr_acl_runtime_t *rt, ppr_acl_rule_db_st
 * @param mgr
 *   Pointer to load balancing manager structure. 
 **/
-void ppr_acl_qsbr_reclaim(ppr_acl_runtime_t *rt)
+void wpr_acl_qsbr_reclaim(wpr_acl_runtime_t *rt)
 {
     unsigned int freed = 0, pending= 0, avail = 0;
     rte_rcu_qsbr_dq_reclaim(rt->acl_ctx_qsbr_dq, rt->qsbr_max_reclaim_size, &freed, &pending, &avail);
     if (freed > 0) {
-        PPR_LOG(PPR_LOG_LB, RTE_LOG_DEBUG, "Reclaimed %u retired LB nodes, %u still pending, %u slots available\n", freed, pending, avail);
+        WPR_LOG(WPR_LOG_LB, RTE_LOG_DEBUG, "Reclaimed %u retired LB nodes, %u still pending, %u slots available\n", freed, pending, avail);
     }
 
     freed = 0;
@@ -1103,7 +1103,7 @@ void ppr_acl_qsbr_reclaim(ppr_acl_runtime_t *rt)
     avail = 0;
     rte_rcu_qsbr_dq_reclaim(rt->acl_tables_qsbr_dq, rt->qsbr_max_reclaim_size, &freed, &pending, &avail);
     if (freed > 0) {
-        PPR_LOG(PPR_LOG_LB, RTE_LOG_DEBUG, "Reclaimed %u retired LB groups, %u still pending, %u slots available\n", freed, pending, avail);
+        WPR_LOG(WPR_LOG_LB, RTE_LOG_DEBUG, "Reclaimed %u retired LB groups, %u still pending, %u slots available\n", freed, pending, avail);
     }
 }
 
@@ -1124,7 +1124,7 @@ void ppr_acl_qsbr_reclaim(ppr_acl_runtime_t *rt)
 * @return
 *   0 on success, negative errno on failure.    
 **/
-int  ppr_acl_runtime_init(ppr_acl_runtime_t *rt, int socket_id, ppr_rcu_ctx_t *rcu_ctx, ppr_global_policy_epoch_t *ge, 
+int  wpr_acl_runtime_init(wpr_acl_runtime_t *rt, int socket_id, wpr_rcu_ctx_t *rcu_ctx, wpr_global_policy_epoch_t *ge, 
     uint32_t reclaim_trigger,uint32_t max_reclaim, unsigned int num_workers)
 {
     //guard on NULL 
@@ -1152,8 +1152,8 @@ int  ppr_acl_runtime_init(ppr_acl_runtime_t *rt, int socket_id, ppr_rcu_ctx_t *r
 
     //allocate per worker ACL stats, these live for the lifetime of the runtime
     //we don't allocate global stats here though, they get swapped in at build / commit time. 
-    rt->stats_shards = rte_zmalloc_socket("ppr_acl_stats_shards",
-                                        sizeof(ppr_acl_stats_shard_t) * RTE_MAX_LCORE,
+    rt->stats_shards = rte_zmalloc_socket("wpr_acl_stats_shards",
+                                        sizeof(wpr_acl_stats_shard_t) * RTE_MAX_LCORE,
                                         RTE_CACHE_LINE_SIZE,
                                         socket_id);
     if (!rt->stats_shards) {
@@ -1163,11 +1163,11 @@ int  ppr_acl_runtime_init(ppr_acl_runtime_t *rt, int socket_id, ppr_rcu_ctx_t *r
 
     // Initialize QSBR DQ structure for ACL context reclamation
     struct rte_rcu_qsbr_dq_parameters group_params = {
-        .name                  = "ppr_acl_ctx_dq",
+        .name                  = "wpr_acl_ctx_dq",
         .v                     = rt->qsbr_ctx->qs,
         .size                  = 1024,
         .esize                 = sizeof(void *),
-        .free_fn               = ppr_acl_ctx_rcu_free,
+        .free_fn               = wpr_acl_ctx_rcu_free,
         .trigger_reclaim_limit = reclaim_trigger,
         .max_reclaim_size      = max_reclaim,
     };
@@ -1178,11 +1178,11 @@ int  ppr_acl_runtime_init(ppr_acl_runtime_t *rt, int socket_id, ppr_rcu_ctx_t *r
 
     //initialise QSBR DQ structure for ACL policy tables reclamation
     struct rte_rcu_qsbr_dq_parameters tables_params = {
-        .name                  = "ppr_acl_tables_dq",
+        .name                  = "wpr_acl_tables_dq",
         .v                     = rt->qsbr_ctx->qs,
         .size                  = 1024,
         .esize                 = sizeof(void *),
-        .free_fn               = ppr_acl_tables_rcu_free,
+        .free_fn               = wpr_acl_tables_rcu_free,
         .trigger_reclaim_limit = reclaim_trigger,
         .max_reclaim_size      = max_reclaim,
     };
@@ -1195,11 +1195,11 @@ int  ppr_acl_runtime_init(ppr_acl_runtime_t *rt, int socket_id, ppr_rcu_ctx_t *r
 
     //initialise QSBR DQ structure for ACL global_stats reclamation
     struct rte_rcu_qsbr_dq_parameters stats_params = {
-        .name                  = "ppr_acl_stats_dq",
+        .name                  = "wpr_acl_stats_dq",
         .v                     = rt->qsbr_ctx->qs,
         .size                  = 1024,
         .esize                 = sizeof(void *),
-        .free_fn               = ppr_acl_stats_rcu_free,
+        .free_fn               = wpr_acl_stats_rcu_free,
         .trigger_reclaim_limit = reclaim_trigger,
         .max_reclaim_size      = max_reclaim,
     };
@@ -1220,7 +1220,7 @@ int  ppr_acl_runtime_init(ppr_acl_runtime_t *rt, int socket_id, ppr_rcu_ctx_t *r
 * @param rt
 *   Pointer to ACL runtime structure to deinitialize.
 **/
-void ppr_acl_runtime_deinit(ppr_acl_runtime_t *rt)
+void wpr_acl_runtime_deinit(wpr_acl_runtime_t *rt)
 {
     if (!rt)
         return;
@@ -1243,11 +1243,11 @@ void ppr_acl_runtime_deinit(ppr_acl_runtime_t *rt)
         rte_free(rt->stats_shards);
 
     // policy tables: free current immediately (we're shutting down)
-    ppr_acl_policy_tables_t *tables = atomic_load(&rt->policy_tables_curr);
+    wpr_acl_policy_tables_t *tables = atomic_load(&rt->policy_tables_curr);
     if (tables)
         rte_free(tables);
 
-    ppr_acl_rule_db_stats_t *global_stats = atomic_load(&rt->global_stats_curr);
+    wpr_acl_rule_db_stats_t *global_stats = atomic_load(&rt->global_stats_curr);
     if (global_stats)
         rte_free(global_stats);
 
@@ -1301,7 +1301,7 @@ void ppr_acl_runtime_deinit(ppr_acl_runtime_t *rt)
 * @return
 *   Pointer to newly created ACL context, or NULL on failure.
 **/
-static struct rte_acl_ctx *ppr_acl_create_ctx(const char *name, int socket_id, uint32_t max_rules, uint32_t rule_size)
+static struct rte_acl_ctx *wpr_acl_create_ctx(const char *name, int socket_id, uint32_t max_rules, uint32_t rule_size)
 {
     struct rte_acl_param param = {
         .name        = name,
@@ -1326,7 +1326,7 @@ static struct rte_acl_ctx *ppr_acl_create_ctx(const char *name, int socket_id, u
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_build_begin(ppr_acl_build_ctx_t *bld, const ppr_acl_runtime_t *rt, uint32_t max_ip4_rules, uint32_t max_ip6_rules, uint32_t max_l2_rules)
+int wpr_acl_build_begin(wpr_acl_build_ctx_t *bld, const wpr_acl_runtime_t *rt, uint32_t max_ip4_rules, uint32_t max_ip6_rules, uint32_t max_l2_rules)
 {
     //Guard on null pointers 
     if (!bld || !rt)
@@ -1336,46 +1336,46 @@ int ppr_acl_build_begin(ppr_acl_build_ctx_t *bld, const ppr_acl_runtime_t *rt, u
     memset(bld, 0, sizeof(*bld));
     bld->socket_id = rt->socket_id;
 
-    bld->tables_build = rte_zmalloc_socket("ppr_acl_tables_build",
+    bld->tables_build = rte_zmalloc_socket("wpr_acl_tables_build",
                                            sizeof(*bld->tables_build),
                                            RTE_CACHE_LINE_SIZE,
                                            bld->socket_id);
     if (!bld->tables_build)
         goto error;
 
-    bld->global_stats_build = rte_zmalloc_socket("ppr_acl_global_stats_build",
-                                           sizeof(ppr_acl_rule_db_stats_t),
+    bld->global_stats_build = rte_zmalloc_socket("wpr_acl_global_stats_build",
+                                           sizeof(wpr_acl_rule_db_stats_t),
                                            RTE_CACHE_LINE_SIZE,
                                            bld->socket_id);
     if (!bld->global_stats_build)
         goto error;
 
     //currently we are not extending rule size, so use default size
-    uint32_t ip_rule_size = RTE_ACL_RULE_SZ(PPR_ACL_IP4_NUM_FIELDS);
-    uint32_t ip6_rule_size = RTE_ACL_RULE_SZ(PPR_ACL_IP6_NUM_FIELDS);
-    uint32_t l2_rule_size = RTE_ACL_RULE_SZ(PPR_ACL_L2_NUM_FIELDS);
+    uint32_t ip_rule_size = RTE_ACL_RULE_SZ(WPR_ACL_IP4_NUM_FIELDS);
+    uint32_t ip6_rule_size = RTE_ACL_RULE_SZ(WPR_ACL_IP6_NUM_FIELDS);
+    uint32_t l2_rule_size = RTE_ACL_RULE_SZ(WPR_ACL_L2_NUM_FIELDS);
 
     char acl_name[RTE_ACL_NAMESIZE];
-    snprintf(acl_name, sizeof(acl_name), "ppr_ip4_acl_%u", rt->lifetime_build_id);
+    snprintf(acl_name, sizeof(acl_name), "wpr_ip4_acl_%u", rt->lifetime_build_id);
 
-    bld->ip4_acl_build = max_ip4_rules ? ppr_acl_create_ctx(acl_name, bld->socket_id, max_ip4_rules, ip_rule_size) : NULL;
+    bld->ip4_acl_build = max_ip4_rules ? wpr_acl_create_ctx(acl_name, bld->socket_id, max_ip4_rules, ip_rule_size) : NULL;
     if(!bld->ip4_acl_build && max_ip4_rules)
         goto error;
 
-    snprintf(acl_name, sizeof(acl_name), "ppr_ip6_acl_%u", rt->lifetime_build_id);
-    bld->ip6_acl_build = max_ip6_rules ? ppr_acl_create_ctx(acl_name, bld->socket_id, max_ip6_rules, ip6_rule_size) : NULL;
+    snprintf(acl_name, sizeof(acl_name), "wpr_ip6_acl_%u", rt->lifetime_build_id);
+    bld->ip6_acl_build = max_ip6_rules ? wpr_acl_create_ctx(acl_name, bld->socket_id, max_ip6_rules, ip6_rule_size) : NULL;
     if(!bld->ip6_acl_build && max_ip6_rules)
         goto error;
 
-    snprintf(acl_name, sizeof(acl_name), "ppr_l2_acl_%u", rt->lifetime_build_id);
-    bld->l2_acl_build = max_l2_rules ? ppr_acl_create_ctx(acl_name, bld->socket_id, max_l2_rules, l2_rule_size) : NULL;
+    snprintf(acl_name, sizeof(acl_name), "wpr_l2_acl_%u", rt->lifetime_build_id);
+    bld->l2_acl_build = max_l2_rules ? wpr_acl_create_ctx(acl_name, bld->socket_id, max_l2_rules, l2_rule_size) : NULL;
     if(!bld->l2_acl_build && max_l2_rules)
         goto error;
 
     return 0;
 
 error:
-    ppr_acl_build_abort(bld);
+    wpr_acl_build_abort(bld);
     return -ENOMEM;
 }
 
@@ -1384,7 +1384,7 @@ error:
 * @param bld
 *   Pointer to ACL build context to abort.
 **/
-void ppr_acl_build_abort(ppr_acl_build_ctx_t *bld)
+void wpr_acl_build_abort(wpr_acl_build_ctx_t *bld)
 {
     if (!bld)
         return;
@@ -1426,20 +1426,20 @@ void ppr_acl_build_abort(ppr_acl_build_ctx_t *bld)
 * @return
 *   0 on success, negative errno on failure.
 **/
-static int ppr_acl_add_ip4_rule_internal(struct rte_acl_ctx *ctx,
-                              ppr_acl_build_ctx_t *bld,
-                              const ppr_acl_ip4_rule_cfg_t *rcfg)
+static int wpr_acl_add_ip4_rule_internal(struct rte_acl_ctx *ctx,
+                              wpr_acl_build_ctx_t *bld,
+                              const wpr_acl_ip4_rule_cfg_t *rcfg)
 {
     //guard on null pointers
     if (! ctx || !bld || ! rcfg)
         return -EINVAL;
 
     //guard on rule_id range
-    if (rcfg->rule_id >= PPR_ACL_MAX_RULES)
+    if (rcfg->rule_id >= WPR_ACL_MAX_RULES)
         return -EINVAL;
 
     //allocate rule structure
-    size_t rule_sz = RTE_ACL_RULE_SZ(PPR_ACL_IP4_NUM_FIELDS);
+    size_t rule_sz = RTE_ACL_RULE_SZ(WPR_ACL_IP4_NUM_FIELDS);
     struct rte_acl_rule *r = rte_zmalloc("acl_rule", rule_sz, 0);
     if (! r)
         return -ENOMEM;
@@ -1447,34 +1447,34 @@ static int ppr_acl_add_ip4_rule_internal(struct rte_acl_ctx *ctx,
     // ALL fields in HOST byte order for consistent matching. API assumes host order inputs in cfg strcuts!!! 
     
     // Tenant exact via range [id,id]
-    r->field[PPR_ACL_IP4_FIELD_TENANT].value. u32      = rcfg->tenant_id_lo;
-    r->field[PPR_ACL_IP4_FIELD_TENANT].mask_range.u32 = rcfg->tenant_id_hi;
+    r->field[WPR_ACL_IP4_FIELD_TENANT].value. u32      = rcfg->tenant_id_lo;
+    r->field[WPR_ACL_IP4_FIELD_TENANT].mask_range.u32 = rcfg->tenant_id_hi;
 
     // Ingress port range [lo, hi]
-    r->field[PPR_ACL_IP4_FIELD_IN_PORT].value. u32      = rcfg->in_port_lo;
-    r->field[PPR_ACL_IP4_FIELD_IN_PORT].mask_range.u32 = rcfg->in_port_hi;
+    r->field[WPR_ACL_IP4_FIELD_IN_PORT].value. u32      = rcfg->in_port_lo;
+    r->field[WPR_ACL_IP4_FIELD_IN_PORT].mask_range.u32 = rcfg->in_port_hi;
 
     // Src/dst IP
-    r->field[PPR_ACL_IP4_FIELD_SRC_IP].value.u32      = rcfg->src_ip;
-    r->field[PPR_ACL_IP4_FIELD_SRC_IP]. mask_range.u32 = rcfg->src_prefix;
+    r->field[WPR_ACL_IP4_FIELD_SRC_IP].value.u32      = rcfg->src_ip;
+    r->field[WPR_ACL_IP4_FIELD_SRC_IP]. mask_range.u32 = rcfg->src_prefix;
 
-    r->field[PPR_ACL_IP4_FIELD_DST_IP]. value.u32      = rcfg->dst_ip;
-    r->field[PPR_ACL_IP4_FIELD_DST_IP].mask_range.u32 = rcfg->dst_prefix;
+    r->field[WPR_ACL_IP4_FIELD_DST_IP]. value.u32      = rcfg->dst_ip;
+    r->field[WPR_ACL_IP4_FIELD_DST_IP].mask_range.u32 = rcfg->dst_prefix;
 
     // Ports
-    r->field[PPR_ACL_IP4_FIELD_SRC_PORT].value.u32      = rcfg->src_port_lo;
-    r->field[PPR_ACL_IP4_FIELD_SRC_PORT]. mask_range.u32 = rcfg->src_port_hi;
+    r->field[WPR_ACL_IP4_FIELD_SRC_PORT].value.u32      = rcfg->src_port_lo;
+    r->field[WPR_ACL_IP4_FIELD_SRC_PORT]. mask_range.u32 = rcfg->src_port_hi;
 
-    r->field[PPR_ACL_IP4_FIELD_DST_PORT].value. u32      = rcfg->dst_port_lo;
-    r->field[PPR_ACL_IP4_FIELD_DST_PORT].mask_range.u32 = rcfg->dst_port_hi;
+    r->field[WPR_ACL_IP4_FIELD_DST_PORT].value. u32      = rcfg->dst_port_lo;
+    r->field[WPR_ACL_IP4_FIELD_DST_PORT].mask_range.u32 = rcfg->dst_port_hi;
 
     // Proto: single byte
     if (rcfg->proto == 0) {
-        r->field[PPR_ACL_IP4_FIELD_PROTO].value.u8      = 0;
-        r->field[PPR_ACL_IP4_FIELD_PROTO].mask_range.u8 = 0;
+        r->field[WPR_ACL_IP4_FIELD_PROTO].value.u8      = 0;
+        r->field[WPR_ACL_IP4_FIELD_PROTO].mask_range.u8 = 0;
     } else {
-        r->field[PPR_ACL_IP4_FIELD_PROTO]. value.u8      = rcfg->proto;
-        r->field[PPR_ACL_IP4_FIELD_PROTO].mask_range.u8 = 0xff;
+        r->field[WPR_ACL_IP4_FIELD_PROTO]. value.u8      = rcfg->proto;
+        r->field[WPR_ACL_IP4_FIELD_PROTO].mask_range.u8 = 0xff;
     }
 
     // Meta rule properties
@@ -1486,14 +1486,14 @@ static int ppr_acl_add_ip4_rule_internal(struct rte_acl_ctx *ctx,
     r->data.userdata      = rcfg->rule_id + 1;   // 0 = miss
 
 
-    ppr_acl_debug_dump_ip4_rule(r);
+    wpr_acl_debug_dump_ip4_rule(r);
 
     //add the rule to the context and check for errors
     //regardless of outcome we are done with the rule structure so make sure to free it
     int rc = rte_acl_add_rules(ctx, r, 1);
     rte_free(r);
     if (rc < 0) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                 "rte_acl_add_rules failed rc=%d (errno=%d)\n", rc, rte_errno);
         return rc;
     }
@@ -1516,13 +1516,13 @@ static int ppr_acl_add_ip4_rule_internal(struct rte_acl_ctx *ctx,
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_build_add_ip4_rule(ppr_acl_build_ctx_t *bld,
-                           const ppr_acl_ip4_rule_cfg_t *rcfg)
+int wpr_acl_build_add_ip4_rule(wpr_acl_build_ctx_t *bld,
+                           const wpr_acl_ip4_rule_cfg_t *rcfg)
 {
     if (!bld || !bld->ip4_acl_build || !rcfg)
         return -EINVAL;
 
-    int rc = ppr_acl_add_ip4_rule_internal(bld->ip4_acl_build, bld, rcfg);
+    int rc = wpr_acl_add_ip4_rule_internal(bld->ip4_acl_build, bld, rcfg);
     if (rc == 0)
         bld->ip4_rule_count++;
     return rc;
@@ -1539,9 +1539,9 @@ int ppr_acl_build_add_ip4_rule(ppr_acl_build_ctx_t *bld,
 * @return
 *   0 on success, negative errno on failure.
 **/
-static int ppr_acl_add_ip6_rule_internal(struct rte_acl_ctx *ctx,
-                              ppr_acl_build_ctx_t *bld,
-                              const ppr_acl_ip6_rule_cfg_t *rcfg)
+static int wpr_acl_add_ip6_rule_internal(struct rte_acl_ctx *ctx,
+                              wpr_acl_build_ctx_t *bld,
+                              const wpr_acl_ip6_rule_cfg_t *rcfg)
 {   
 
     //guard on null pointers
@@ -1549,11 +1549,11 @@ static int ppr_acl_add_ip6_rule_internal(struct rte_acl_ctx *ctx,
         return -EINVAL;
 
     //guard on rule_id range
-    if (rcfg->rule_id >= PPR_ACL_MAX_RULES)
+    if (rcfg->rule_id >= WPR_ACL_MAX_RULES)
         return -EINVAL;
 
     //allocate rule structure
-    size_t rule_sz = sizeof(struct rte_acl_rule) + sizeof(struct rte_acl_field) * PPR_ACL_IP6_NUM_FIELDS;
+    size_t rule_sz = sizeof(struct rte_acl_rule) + sizeof(struct rte_acl_field) * WPR_ACL_IP6_NUM_FIELDS;
     struct rte_acl_rule *r = rte_zmalloc("acl_rule", rule_sz, 0);
     if (!r) 
         return -ENOMEM;
@@ -1561,12 +1561,12 @@ static int ppr_acl_add_ip6_rule_internal(struct rte_acl_ctx *ctx,
     // All fields in HOST byte order for consistent matching. API assumes host order inputs in cfg strcuts!!!
 
     //tenant exact [id,id]
-    r->field[PPR_ACL_IP6_FIELD_TENANT].value.u32      = rcfg->tenant_id_lo;
-    r->field[PPR_ACL_IP6_FIELD_TENANT].mask_range.u32 = rcfg->tenant_id_hi;
+    r->field[WPR_ACL_IP6_FIELD_TENANT].value.u32      = rcfg->tenant_id_lo;
+    r->field[WPR_ACL_IP6_FIELD_TENANT].mask_range.u32 = rcfg->tenant_id_hi;
 
     // Ingress port [lo,hi]
-    r->field[PPR_ACL_IP6_FIELD_IN_PORT].value.u32      = rcfg->in_port_lo;
-    r->field[PPR_ACL_IP6_FIELD_IN_PORT].mask_range.u32 = rcfg->in_port_hi;
+    r->field[WPR_ACL_IP6_FIELD_IN_PORT].value.u32      = rcfg->in_port_lo;
+    r->field[WPR_ACL_IP6_FIELD_IN_PORT].mask_range.u32 = rcfg->in_port_hi;
 
     // IPv6 addresses: convert 16-byte array into 4x u32 and split prefix
     uint32_t src32[4], dst32[4];
@@ -1574,27 +1574,27 @@ static int ppr_acl_add_ip6_rule_internal(struct rte_acl_ctx *ctx,
     memcpy(dst32, rcfg->dst_ip, 16);
 
     // The first 4 fields = 128-bit IPv6 src address
-    acl_ipv6_rule_fill(rcfg->src_ip, &r->field[PPR_ACL_IP6_FIELD_SRC_IP0]);
-    apply_ipv6_prefix(&r->field[PPR_ACL_IP6_FIELD_SRC_IP0], rcfg->src_prefix);
+    acl_ipv6_rule_fill(rcfg->src_ip, &r->field[WPR_ACL_IP6_FIELD_SRC_IP0]);
+    apply_ipv6_prefix(&r->field[WPR_ACL_IP6_FIELD_SRC_IP0], rcfg->src_prefix);
 
     // Next 4 fields = 128-bit IPv6 dst address
-    acl_ipv6_rule_fill(rcfg->dst_ip, &r->field[PPR_ACL_IP6_FIELD_DST_IP0]);
-    apply_ipv6_prefix(&r->field[PPR_ACL_IP6_FIELD_DST_IP0], rcfg->dst_prefix);
+    acl_ipv6_rule_fill(rcfg->dst_ip, &r->field[WPR_ACL_IP6_FIELD_DST_IP0]);
+    apply_ipv6_prefix(&r->field[WPR_ACL_IP6_FIELD_DST_IP0], rcfg->dst_prefix);
 
     // Ports
-    r->field[PPR_ACL_IP6_FIELD_SRC_PORT].value.u16      = rcfg->src_port_lo;
-    r->field[PPR_ACL_IP6_FIELD_SRC_PORT].mask_range.u16 = rcfg->src_port_hi;
+    r->field[WPR_ACL_IP6_FIELD_SRC_PORT].value.u16      = rcfg->src_port_lo;
+    r->field[WPR_ACL_IP6_FIELD_SRC_PORT].mask_range.u16 = rcfg->src_port_hi;
 
-    r->field[PPR_ACL_IP6_FIELD_DST_PORT].value.u16      = rcfg->dst_port_lo;
-    r->field[PPR_ACL_IP6_FIELD_DST_PORT].mask_range.u16 = rcfg->dst_port_hi;
+    r->field[WPR_ACL_IP6_FIELD_DST_PORT].value.u16      = rcfg->dst_port_lo;
+    r->field[WPR_ACL_IP6_FIELD_DST_PORT].mask_range.u16 = rcfg->dst_port_hi;
 
     // Proto
     if (rcfg->proto == 0) {
-        r->field[PPR_ACL_IP6_FIELD_PROTO].value.u8      = 0;
-        r->field[PPR_ACL_IP6_FIELD_PROTO].mask_range.u8 = 0;      /* wildcard */
+        r->field[WPR_ACL_IP6_FIELD_PROTO].value.u8      = 0;
+        r->field[WPR_ACL_IP6_FIELD_PROTO].mask_range.u8 = 0;      /* wildcard */
     } else {
-        r->field[PPR_ACL_IP6_FIELD_PROTO].value.u8      = rcfg->proto;
-        r->field[PPR_ACL_IP6_FIELD_PROTO].mask_range.u8 = 0xff;   // exact
+        r->field[WPR_ACL_IP6_FIELD_PROTO].value.u8      = rcfg->proto;
+        r->field[WPR_ACL_IP6_FIELD_PROTO].mask_range.u8 = 0xff;   // exact
     }
 
     // Meta rule properties
@@ -1607,7 +1607,7 @@ static int ppr_acl_add_ip6_rule_internal(struct rte_acl_ctx *ctx,
 
     //add the rule to the context and check for errors. 
     //regardless of outcome we are done with the rule structure so make sure to free it
-    ppr_acl_debug_dump_ip6_rule(r);
+    wpr_acl_debug_dump_ip6_rule(r);
     int rc = rte_acl_add_rules(ctx, r, 1);
     rte_free(r);
     if (rc < 0)
@@ -1632,13 +1632,13 @@ static int ppr_acl_add_ip6_rule_internal(struct rte_acl_ctx *ctx,
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_build_add_ip6_rule(ppr_acl_build_ctx_t *bld,
-                               const ppr_acl_ip6_rule_cfg_t *rcfg)
+int wpr_acl_build_add_ip6_rule(wpr_acl_build_ctx_t *bld,
+                               const wpr_acl_ip6_rule_cfg_t *rcfg)
 {
     if (!bld || !bld->ip6_acl_build || !rcfg)
         return -EINVAL;
 
-    int rc = ppr_acl_add_ip6_rule_internal(bld->ip6_acl_build, bld, rcfg);
+    int rc = wpr_acl_add_ip6_rule_internal(bld->ip6_acl_build, bld, rcfg);
     if (rc == 0)
         bld->ip6_rule_count++;
     return rc;
@@ -1656,20 +1656,20 @@ int ppr_acl_build_add_ip6_rule(ppr_acl_build_ctx_t *bld,
 * @return
 *   0 on success, negative errno on failure.
 **/
-static int ppr_acl_add_l2_rule_internal(struct rte_acl_ctx *ctx,
-                             ppr_acl_build_ctx_t *bld,
-                             const ppr_acl_l2_rule_cfg_t *rcfg)
+static int wpr_acl_add_l2_rule_internal(struct rte_acl_ctx *ctx,
+                             wpr_acl_build_ctx_t *bld,
+                             const wpr_acl_l2_rule_cfg_t *rcfg)
 {
     //guard on null pointers
     if (!ctx || !bld || !rcfg)
         return -EINVAL;
 
     //guard on rule_id range
-    if (rcfg->rule_id >= PPR_ACL_MAX_RULES)
+    if (rcfg->rule_id >= WPR_ACL_MAX_RULES)
         return -EINVAL;
 
     //allocate rule structure
-    size_t rule_sz = sizeof(struct rte_acl_rule) + sizeof(struct rte_acl_field) * PPR_ACL_L2_NUM_FIELDS;
+    size_t rule_sz = sizeof(struct rte_acl_rule) + sizeof(struct rte_acl_field) * WPR_ACL_L2_NUM_FIELDS;
     struct rte_acl_rule *r = rte_zmalloc("acl_rule", rule_sz, 0);
     if (!r) 
         return -ENOMEM;
@@ -1677,27 +1677,27 @@ static int ppr_acl_add_l2_rule_internal(struct rte_acl_ctx *ctx,
     // Initialize rule fields in HOST byte order for consistent matching. API assumes host order inputs in cfg strcuts!!!
 
     // Tenant
-    r->field[PPR_ACL_L2_FIELD_TENANT].value.u32      = rcfg->tenant_id_lo;
-    r->field[PPR_ACL_L2_FIELD_TENANT].mask_range.u32 = rcfg->tenant_id_hi;
+    r->field[WPR_ACL_L2_FIELD_TENANT].value.u32      = rcfg->tenant_id_lo;
+    r->field[WPR_ACL_L2_FIELD_TENANT].mask_range.u32 = rcfg->tenant_id_hi;
 
     // Ingress port range
-    r->field[PPR_ACL_L2_FIELD_IN_PORT].value.u16      = rcfg->in_port_lo;
-    r->field[PPR_ACL_L2_FIELD_IN_PORT].mask_range.u16 = rcfg->in_port_hi;
+    r->field[WPR_ACL_L2_FIELD_IN_PORT].value.u16      = rcfg->in_port_lo;
+    r->field[WPR_ACL_L2_FIELD_IN_PORT].mask_range.u16 = rcfg->in_port_hi;
 
     // VLANs
-    r->field[PPR_ACL_L2_FIELD_OUTER_VLAN].value.u16      = rcfg->outer_vlan_lo;
-    r->field[PPR_ACL_L2_FIELD_OUTER_VLAN].mask_range.u16 = rcfg->outer_vlan_hi;
+    r->field[WPR_ACL_L2_FIELD_OUTER_VLAN].value.u16      = rcfg->outer_vlan_lo;
+    r->field[WPR_ACL_L2_FIELD_OUTER_VLAN].mask_range.u16 = rcfg->outer_vlan_hi;
 
-    r->field[PPR_ACL_L2_FIELD_INNER_VLAN].value.u16      = rcfg->inner_vlan_lo;
-    r->field[PPR_ACL_L2_FIELD_INNER_VLAN].mask_range.u16 = rcfg->inner_vlan_hi;
+    r->field[WPR_ACL_L2_FIELD_INNER_VLAN].value.u16      = rcfg->inner_vlan_lo;
+    r->field[WPR_ACL_L2_FIELD_INNER_VLAN].mask_range.u16 = rcfg->inner_vlan_hi;
 
     // EtherType
     if (rcfg->ether_type == 0) {
-        r->field[PPR_ACL_L2_FIELD_ETHER_TYPE].value.u16      = 0;
-        r->field[PPR_ACL_L2_FIELD_ETHER_TYPE].mask_range.u16 = 0;     // wildcard
+        r->field[WPR_ACL_L2_FIELD_ETHER_TYPE].value.u16      = 0;
+        r->field[WPR_ACL_L2_FIELD_ETHER_TYPE].mask_range.u16 = 0;     // wildcard
     } else {
-        r->field[PPR_ACL_L2_FIELD_ETHER_TYPE].value.u16      = rcfg->ether_type;
-        r->field[PPR_ACL_L2_FIELD_ETHER_TYPE].mask_range.u16 = 0xffff;
+        r->field[WPR_ACL_L2_FIELD_ETHER_TYPE].value.u16      = rcfg->ether_type;
+        r->field[WPR_ACL_L2_FIELD_ETHER_TYPE].mask_range.u16 = 0xffff;
     }
 
     // MACs: pack 6B into low 48 bits, note we include a specific check mac match enable flag
@@ -1717,30 +1717,30 @@ static int ppr_acl_add_l2_rule_internal(struct rte_acl_ctx *ctx,
                         ((uint32_t)d[4] << 8)  |
                         (uint32_t)d[5];
 
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_HI].value.u16 = sm_hi;
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_HI].mask_range.u16 = 0xFFFF;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_HI].value.u16 = sm_hi;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_HI].mask_range.u16 = 0xFFFF;
 
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_LO].value.u32 = sm_lo;
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_LO].mask_range.u32 = 0xFFFFFFFF;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_LO].value.u32 = sm_lo;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_LO].mask_range.u32 = 0xFFFFFFFF;
 
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_HI].value.u16 = dm_hi;
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_HI].mask_range.u16 = 0xFFFF;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_HI].value.u16 = dm_hi;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_HI].mask_range.u16 = 0xFFFF;
 
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_LO].value.u32 = dm_lo;
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_LO].mask_range.u32 = 0xFFFFFFFF;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_LO].value.u32 = dm_lo;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_LO].mask_range.u32 = 0xFFFFFFFF;
     } else {
         /* wildcard MAC */
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_HI].value.u16 = 0;
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_HI].mask_range.u16 = 0;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_HI].value.u16 = 0;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_HI].mask_range.u16 = 0;
 
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_LO].value.u32 = 0;
-        r->field[PPR_ACL_L2_FIELD_SRC_MAC_LO].mask_range.u32 = 0;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_LO].value.u32 = 0;
+        r->field[WPR_ACL_L2_FIELD_SRC_MAC_LO].mask_range.u32 = 0;
 
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_HI].value.u16 = 0;
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_HI].mask_range.u16 = 0;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_HI].value.u16 = 0;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_HI].mask_range.u16 = 0;
 
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_LO].value.u32 = 0;
-        r->field[PPR_ACL_L2_FIELD_DST_MAC_LO].mask_range.u32 = 0;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_LO].value.u32 = 0;
+        r->field[WPR_ACL_L2_FIELD_DST_MAC_LO].mask_range.u32 = 0;
     }
 
     // Meta rule properties
@@ -1751,7 +1751,7 @@ static int ppr_acl_add_l2_rule_internal(struct rte_acl_ctx *ctx,
     r->data.priority      = rcfg->priority;
     r->data.userdata      = rcfg->rule_id + 1;
 
-    ppr_acl_debug_dump_l2_rule(r);
+    wpr_acl_debug_dump_l2_rule(r);
 
     //add the rule to the context and check for errors.
     //regardless of outcome we are done with the rule structure so make sure to free it
@@ -1779,13 +1779,13 @@ static int ppr_acl_add_l2_rule_internal(struct rte_acl_ctx *ctx,
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_build_add_l2_rule(ppr_acl_build_ctx_t *bld,
-                              const ppr_acl_l2_rule_cfg_t *rcfg)
+int wpr_acl_build_add_l2_rule(wpr_acl_build_ctx_t *bld,
+                              const wpr_acl_l2_rule_cfg_t *rcfg)
 {
     if (!bld || !bld->l2_acl_build || !rcfg)
         return -EINVAL;
 
-    int rc = ppr_acl_add_l2_rule_internal(bld->l2_acl_build, bld, rcfg);
+    int rc = wpr_acl_add_l2_rule_internal(bld->l2_acl_build, bld, rcfg);
     if (rc == 0)
         bld->l2_rule_count++;
     return rc;
@@ -1801,7 +1801,7 @@ int ppr_acl_build_add_l2_rule(ppr_acl_build_ctx_t *bld,
 * @return
 *   0 on success, negative errno on failure.
 **/
-int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
+int wpr_acl_build_commit(wpr_acl_runtime_t *rt, wpr_acl_build_ctx_t *bld)
 {
     //guard on null pointers
     if (!rt || !bld)
@@ -1811,14 +1811,14 @@ int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
     if (bld->ip4_acl_build && bld->ip4_rule_count > 0) {
         struct rte_acl_config cfg = {
             .num_categories = 1,
-            .num_fields     = PPR_ACL_IP4_NUM_FIELDS,
+            .num_fields     = WPR_ACL_IP4_NUM_FIELDS,
         };
-        memcpy(cfg.defs, ppr_acl_ip4_defs, sizeof(ppr_acl_ip4_defs));
+        memcpy(cfg.defs, wpr_acl_ip4_defs, sizeof(wpr_acl_ip4_defs));
 
         //call the build and check for errors
         int rc = rte_acl_build(bld->ip4_acl_build, &cfg);
         if (rc < 0){
-            PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+            WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                     "rte_acl_build failed rc=%d (errno=%d)\n", rc, rte_errno);
             return rc;
         }
@@ -1829,13 +1829,13 @@ int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
     if (bld->ip6_acl_build && bld->ip6_rule_count > 0) {
         struct rte_acl_config cfg = {
             .num_categories = 1,
-            .num_fields     = PPR_ACL_IP6_NUM_FIELDS,
+            .num_fields     = WPR_ACL_IP6_NUM_FIELDS,
         };
-        memcpy(cfg.defs, ppr_acl_ip6_defs, sizeof(ppr_acl_ip6_defs));
+        memcpy(cfg.defs, wpr_acl_ip6_defs, sizeof(wpr_acl_ip6_defs));
 
         int rc = rte_acl_build(bld->ip6_acl_build, &cfg);
         if (rc < 0){
-            PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+            WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                     "rte_acl_build failed rc=%d (errno=%d)\n", rc, rte_errno);
             return rc;
         }
@@ -1845,13 +1845,13 @@ int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
     if (bld->l2_acl_build && bld->l2_rule_count > 0) {
         struct rte_acl_config cfg = {
             .num_categories = 1,
-            .num_fields     = PPR_ACL_L2_NUM_FIELDS,
+            .num_fields     = WPR_ACL_L2_NUM_FIELDS,
         };
-        memcpy(cfg.defs, ppr_acl_l2_defs, sizeof(ppr_acl_l2_defs));
+        memcpy(cfg.defs, wpr_acl_l2_defs, sizeof(wpr_acl_l2_defs));
 
         int rc = rte_acl_build(bld->l2_acl_build, &cfg);
         if (rc < 0){
-            PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+            WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                     "rte_acl_build failed rc=%d (errno=%d)\n", rc, rte_errno);
             return rc;
         }
@@ -1864,22 +1864,22 @@ int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
     struct rte_acl_ctx *old_ip4         = NULL;
     struct rte_acl_ctx *old_ip6         = NULL;
     struct rte_acl_ctx *old_l2          = NULL;
-    ppr_acl_policy_tables_t *old_tables = NULL;
-    ppr_acl_rule_db_stats_t *old_stats   = NULL;
+    wpr_acl_policy_tables_t *old_tables = NULL;
+    wpr_acl_rule_db_stats_t *old_stats   = NULL;
 
     //only swap in contexts that were built (have rules)
     if (bld->ip4_rule_count > 0){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "Swapping in new IPv4 ACL context with %u rules\n", bld->ip4_rule_count);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "Swapping in new IPv4 ACL context with %u rules\n", bld->ip4_rule_count);
         old_ip4 = atomic_exchange_explicit(&rt->ip4_acl_curr, bld->ip4_acl_build, memory_order_release);
     }
     
     if (bld->ip6_rule_count > 0){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "Swapping in new IPv6 ACL context with %u rules\n", bld->ip6_rule_count);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "Swapping in new IPv6 ACL context with %u rules\n", bld->ip6_rule_count);
         old_ip6 = atomic_exchange_explicit(&rt->ip6_acl_curr, bld->ip6_acl_build, memory_order_release);
     }
 
     if (bld->l2_rule_count > 0){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "Swapping in new L2 ACL context with %u rules\n", bld->l2_rule_count);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "Swapping in new L2 ACL context with %u rules\n", bld->l2_rule_count);
         old_l2 = atomic_exchange_explicit(&rt->l2_acl_curr, bld->l2_acl_build, memory_order_release);
     }
 
@@ -1894,20 +1894,20 @@ int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
 
     // Retire old ACL contexts and table pointers (if any)
     if (old_ip4)
-        ppr_acl_retire_ctx(rt, old_ip4);
+        wpr_acl_retire_ctx(rt, old_ip4);
     if (old_ip6)                                    
-        ppr_acl_retire_ctx(rt, old_ip6);
+        wpr_acl_retire_ctx(rt, old_ip6);
     if (old_l2)
-        ppr_acl_retire_ctx(rt, old_l2);
+        wpr_acl_retire_ctx(rt, old_l2);
     if (old_tables)
-        ppr_acl_retire_table(rt, old_tables);
+        wpr_acl_retire_table(rt, old_tables);
     if (old_stats)
-        ppr_acl_retire_global_stats(rt, old_stats);
+        wpr_acl_retire_global_stats(rt, old_stats);
     
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "Committed new ACL policy (epoch %u)\n", new_epoch);
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "  IPv4 rules: %u\n", bld->ip4_rule_count);
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "  IPv6 rules: %u\n", bld->ip6_rule_count);
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "  L2 rules:   %u\n", bld->l2_rule_count);
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "Committed new ACL policy (epoch %u)\n", new_epoch);
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "  IPv4 rules: %u\n", bld->ip4_rule_count);
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "  IPv6 rules: %u\n", bld->ip6_rule_count);
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "  L2 rules:   %u\n", bld->l2_rule_count);
 
     // Detach build ctx ownership
     // memset should be safe here since we have already swapped out all pointers
@@ -1926,7 +1926,7 @@ int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
 
 
 /** 
-* RTE ACL API needs "flat" key structs; build those from PPR key IPv4 structs. Note PPR uses host byte order in flow key structs, so we convert
+* RTE ACL API needs "flat" key structs; build those from WPR key IPv4 structs. Note WPR uses host byte order in flow key structs, so we convert
 * them to network byte order as we build the internal key struct. This is probably a bit inefficent, <TODO> revisit flow key struct design later.
 * @param fk
 *   Pointer to flow key structure.
@@ -1935,11 +1935,11 @@ int ppr_acl_build_commit(ppr_acl_runtime_t *rt, ppr_acl_build_ctx_t *bld)
 * @param out
 *   Pointer to output internal ACL IP4 key structure.   
 **/
-static inline void ppr_acl_build_ip4_key_internal(const ppr_flow_key_t *fk,
+static inline void wpr_acl_build_ip4_key_internal(const wpr_flow_key_t *fk,
                                                   uint16_t in_port,
-                                                  ppr_acl_ip4_key_internal_t *out)
+                                                  wpr_acl_ip4_key_internal_t *out)
 {
-    const ppr_flow_key_v4_t *v4 = &fk->ip.v4;
+    const wpr_flow_key_v4_t *v4 = &fk->ip.v4;
     
     memset(out, 0, sizeof(*out));
 
@@ -1960,7 +1960,7 @@ static inline void ppr_acl_build_ip4_key_internal(const ppr_flow_key_t *fk,
 
 
 /** 
-* RTE ACL API needs "flat" key structs; build those from PPR key IPv6 structs. Note PPR uses host byte order in flow key structs, so we convert
+* RTE ACL API needs "flat" key structs; build those from WPR key IPv6 structs. Note WPR uses host byte order in flow key structs, so we convert
 * them to network byte order as we build the internal key struct. This is probably a bit inefficent, <TODO> revisit flow key struct design later.
 * @param fk
 *   Pointer to flow key structure.
@@ -1969,11 +1969,11 @@ static inline void ppr_acl_build_ip4_key_internal(const ppr_flow_key_t *fk,
 * @param out
 *   Pointer to output internal ACL IP6 key structure.   
 **/
-static inline void ppr_acl_build_ip6_key_internal(const ppr_flow_key_t *fk,
+static inline void wpr_acl_build_ip6_key_internal(const wpr_flow_key_t *fk,
                                                   uint16_t in_port,
-                                                  ppr_acl_ip6_key_internal_t *out)
+                                                  wpr_acl_ip6_key_internal_t *out)
 {
-    const ppr_flow_key_v6_t *v6 = &fk->ip.v6;
+    const wpr_flow_key_v6_t *v6 = &fk->ip.v6;
 
     memset(out, 0, sizeof(*out));
     out->tenant_id = rte_cpu_to_be_32(fk->tenant_id);
@@ -1989,15 +1989,15 @@ static inline void ppr_acl_build_ip6_key_internal(const ppr_flow_key_t *fk,
 }
 
 /** 
-* RTE ACL API needs "flat" key structs; build those from PPR key L2 structs. Note PPR uses host byte order in flow key structs, so we convert
+* RTE ACL API needs "flat" key structs; build those from WPR key L2 structs. Note WPR uses host byte order in flow key structs, so we convert
 * them to network byte order as we build the internal key struct. This is probably a bit inefficent, <TODO> revisit flow key struct design later.
 * @param k
 *   Pointer to L2 flow key structure.
 * @param out
 *   Pointer to output internal ACL L2 key structure.
 **/
-static inline void ppr_acl_build_l2_key_internal(const ppr_l2_flow_key_t *k,
-                              ppr_acl_l2_key_internal_t *out)
+static inline void wpr_acl_build_l2_key_internal(const wpr_l2_flow_key_t *k,
+                              wpr_acl_l2_key_internal_t *out)
 {
     memset(out, 0, sizeof(*out));
     out->l2_tag = 0;
@@ -2008,7 +2008,7 @@ static inline void ppr_acl_build_l2_key_internal(const ppr_l2_flow_key_t *k,
      */
 
     //print l2 in port 
-    //PPR_LOG(PPR_LOG_ACL, RTE_LOG_INFO, "L2 key in_port in acl key conversion: %u\n", k->in_port);
+    //WPR_LOG(WPR_LOG_ACL, RTE_LOG_INFO, "L2 key in_port in acl key conversion: %u\n", k->in_port);
 
     /* RANGE fields: store key in network order */
     out->tenant_id  = rte_cpu_to_be_32(k->tenant_id);
@@ -2052,14 +2052,14 @@ static inline void ppr_acl_build_l2_key_internal(const ppr_l2_flow_key_t *k,
 * @param res
 *   Pointer to output action/result structure provided by the user. 
 **/
-int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
-                        const ppr_flow_key_t    *key,
+int wpr_acl_classify_ip(const wpr_acl_runtime_t *rt,
+                        const wpr_flow_key_t    *key,
                         uint16_t                 in_port,
-                        ppr_policy_action_t     *res)
+                        wpr_policy_action_t     *res)
 {
     //guard against null pointers
     if (!rt || !key || !res){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR, "ppr_acl_classify_ip: invalid null pointer\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR, "wpr_acl_classify_ip: invalid null pointer\n");
         return -EINVAL;
     }
 
@@ -2069,7 +2069,7 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
     //get IPv4/6 control structures
     struct rte_acl_ctx *ip4_ctx = atomic_load_explicit(&rt->ip4_acl_curr, memory_order_acquire);
     struct rte_acl_ctx *ip6_ctx = atomic_load_explicit(&rt->ip6_acl_curr, memory_order_acquire);
-    PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+    WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
             "IPv4 classify using ctx=%p, tables=%p\n",
             (void *)ip4_ctx,
             (void *)atomic_load_explicit(&rt->policy_tables_curr,
@@ -2079,23 +2079,23 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
         
         //if we don't have a configured IPv4 ACL context, default NOOP instruction (ACL Stage does nothing)
         if (!ip4_ctx) {
-            PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "No IPv4 ACL context configured, default NOOP\n");
+            WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "No IPv4 ACL context configured, default NOOP\n");
             res->hit = false;
             res->default_policy = FLOW_ACT_NOOP;
             return 0;
         }
 
         //build internal key struct
-        ppr_acl_ip4_key_internal_t k_int;
+        wpr_acl_ip4_key_internal_t k_int;
 
         //rte ACL engine is designed to classify batches of keys; we just have one
         //so we create a array of pointers of length 1 
         const uint8_t *keys[1];
         
-        //we convert the PPR flowtable key into the internal flat key struct
-        ppr_acl_build_ip4_key_internal(key, in_port, &k_int);
+        //we convert the WPR flowtable key into the internal flat key struct
+        wpr_acl_build_ip4_key_internal(key, in_port, &k_int);
 
-        ppr_acl_debug_dump_ip4_key_fields(&k_int);
+        wpr_acl_debug_dump_ip4_key_fields(&k_int);
 
         //then we point the first element of the array to our internal key struct
         keys[0] = (const uint8_t *)&k_int;
@@ -2111,7 +2111,7 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
         if (rc < 0)
             return rc;
 
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG,
                 "IPv4 classify: ctx=%p result[0]=%u\n",
                 (void *)ip4_ctx, results[0]);
 
@@ -2120,7 +2120,7 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
 
         //if userdata is 0, we had a miss, so return default NOOP action
         if (userdata == 0) {
-            PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "IPv4 classification miss\n");
+            WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "IPv4 classification miss\n");
             res->hit            = false;
             res->default_policy = FLOW_ACT_NOOP;
             return 0;
@@ -2130,26 +2130,26 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
         uint32_t idx = userdata - 1;
 
         //if index is out of bounds, return default NOOP action
-        if (idx >= PPR_ACL_MAX_RULES) {
-            PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR, "IPv4 classification index out of bounds: %u\n", idx);
+        if (idx >= WPR_ACL_MAX_RULES) {
+            WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR, "IPv4 classification index out of bounds: %u\n", idx);
             res->hit            = false;
             res->default_policy = FLOW_ACT_NOOP;
             return 0;
         }
 
         //if we have a valid rule entry, load the current policy tables pointer
-        ppr_acl_policy_tables_t *tables = atomic_load_explicit(&rt->policy_tables_curr, memory_order_acquire);
+        wpr_acl_policy_tables_t *tables = atomic_load_explicit(&rt->policy_tables_curr, memory_order_acquire);
 
         //if no policy tables, return default NOOP action
         if (!tables) {
-            PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR, "No policy tables found during IPv4 classification\n");
+            WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR, "No policy tables found during IPv4 classification\n");
             res->hit            = false;
             res->default_policy = FLOW_ACT_NOOP;
             return 0;
         }
 
         //if we made it here, we have a valid index and policy tables, so load the action from the table
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "IPv4 classification hit index: %u\n", idx);
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "IPv4 classification hit index: %u\n", idx);
         *res = tables->ip4_actions[idx];
 
         // sanity guard
@@ -2168,13 +2168,13 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
             return 0;
         }
 
-        ppr_acl_ip6_key_internal_t k_int;
+        wpr_acl_ip6_key_internal_t k_int;
         const uint8_t *keys[1];
         uint32_t results[1];
 
-        ppr_acl_build_ip6_key_internal(key, in_port, &k_int);
+        wpr_acl_build_ip6_key_internal(key, in_port, &k_int);
 
-        ppr_acl_debug_dump_ip6_key_fields(&k_int);
+        wpr_acl_debug_dump_ip6_key_fields(&k_int);
 
         keys[0] = (const uint8_t *)&k_int;
 
@@ -2192,13 +2192,13 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
         }
 
         uint32_t idx = userdata - 1;
-        if (idx >= PPR_ACL_MAX_RULES) {
+        if (idx >= WPR_ACL_MAX_RULES) {
             res->hit            = false;
             res->default_policy = FLOW_ACT_NOOP;
             return 0;
         }
 
-        ppr_acl_policy_tables_t *tables =
+        wpr_acl_policy_tables_t *tables =
             atomic_load_explicit(&rt->policy_tables_curr,
                                 memory_order_acquire);
         if (!tables) {
@@ -2231,14 +2231,14 @@ int ppr_acl_classify_ip(const ppr_acl_runtime_t *rt,
 * @param res
 *   Pointer to output action/result structure.  
 **/
-int ppr_acl_classify_l2(const ppr_acl_runtime_t *rt,
-                    const ppr_l2_flow_key_t *l2_key,
-                    ppr_policy_action_t        *res)
+int wpr_acl_classify_l2(const wpr_acl_runtime_t *rt,
+                    const wpr_l2_flow_key_t *l2_key,
+                    wpr_policy_action_t        *res)
 {
 
     //guard against null pointers
     if (!rt || !l2_key){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR, "ppr_acl_classify_l2: invalid null pointer\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR, "wpr_acl_classify_l2: invalid null pointer\n");
         return -EINVAL;
     }
 
@@ -2250,52 +2250,52 @@ int ppr_acl_classify_l2(const ppr_acl_runtime_t *rt,
     
     //if no L2 ACL context configured, default permit
     if (!ctx) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "No L2 ACL context configured, default NOOP\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "No L2 ACL context configured, default NOOP\n");
         res->hit = false;
         res->default_policy = FLOW_ACT_NOOP;
         return 0;
     }
 
     //build internal key struct
-    ppr_acl_l2_key_internal_t k_int;
+    wpr_acl_l2_key_internal_t k_int;
     const uint8_t *keys[1];
     uint32_t results[1];
 
-    ppr_acl_build_l2_key_internal(l2_key, &k_int);
+    wpr_acl_build_l2_key_internal(l2_key, &k_int);
     keys[0] = (const uint8_t *)&k_int;
 
-    ppr_acl_debug_dump_l2_key_fields(&k_int);
+    wpr_acl_debug_dump_l2_key_fields(&k_int);
 
 
     //call classify on single key
     const uint32_t categories = 1;
     int rc = rte_acl_classify(ctx, keys, results, 1, categories);
     if (rc < 0){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_ERR,
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_ERR,
                 "rte_acl_classify failed rc=%d (errno=%d)\n", rc, rte_errno);
         return rc;
     }
     uint32_t userdata = results[0];
 
     if (userdata == 0) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "L2 classification miss\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "L2 classification miss\n");
         res->hit            = false;
         res->default_policy = FLOW_ACT_NOOP;
         return 0;
     }
 
     uint32_t idx = userdata - 1;
-    if (idx >= PPR_ACL_MAX_RULES) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "L2 classification index out of range\n");
+    if (idx >= WPR_ACL_MAX_RULES) {
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "L2 classification index out of range\n");
         res->hit            = false;
         res->default_policy = FLOW_ACT_NOOP;
         return 0;
     }
 
-    ppr_acl_policy_tables_t *tables = atomic_load_explicit(&rt->policy_tables_curr, memory_order_acquire);
+    wpr_acl_policy_tables_t *tables = atomic_load_explicit(&rt->policy_tables_curr, memory_order_acquire);
 
     if (!tables) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "No policy tables configured, default NOOP\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "No policy tables configured, default NOOP\n");
         res->hit            = false;
         res->default_policy = FLOW_ACT_NOOP;
         return 0;
@@ -2304,27 +2304,27 @@ int ppr_acl_classify_l2(const ppr_acl_runtime_t *rt,
     *res = tables->l2_actions[idx];
 
     if (!res->hit) {
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "L2 classification no hit, default NOOP\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "L2 classification no hit, default NOOP\n");
         res->default_policy = FLOW_ACT_NOOP;
     }
 
     return 0;
 }
 
-int ppr_acl_stats_accumulator(ppr_acl_runtime_t *rt)
+int wpr_acl_stats_accumulator(wpr_acl_runtime_t *rt)
 {
     if (!rt)
         return -EINVAL;
 
     //get global stats pointer safely 
-    ppr_acl_rule_db_stats_t *global_stats = atomic_load_explicit(&rt->global_stats_curr, memory_order_acquire);
+    wpr_acl_rule_db_stats_t *global_stats = atomic_load_explicit(&rt->global_stats_curr, memory_order_acquire);
     if(!global_stats){
-        PPR_LOG(PPR_LOG_ACL, RTE_LOG_DEBUG, "ppr_acl_stats_accumulator: invalid global stats pointer\n");
+        WPR_LOG(WPR_LOG_ACL, RTE_LOG_DEBUG, "wpr_acl_stats_accumulator: invalid global stats pointer\n");
         return -EINVAL;
     }
     
     for (unsigned int i=0; i < rt->worker_cores ; i++){
-        for (unsigned int j = 0; j < PPR_ACL_MAX_RULES; j++){
+        for (unsigned int j = 0; j < WPR_ACL_MAX_RULES; j++){
             //snapshot open / closed flows from each shard per type 
             //IPV4
             uint64_t newf = atomic_exchange_explicit(&rt->stats_shards[i].ip4[j].new_flows, 0, memory_order_relaxed);

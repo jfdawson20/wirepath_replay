@@ -15,7 +15,7 @@ Description: header file for pcap_loader code and data types
 #include <stdbool.h>
 #include <stdint.h>
 
-#define PPR_MAX_PCAP_SLOTS 256
+#define WPR_MAX_PCAP_SLOTS 256
 
 typedef enum pcap_cmd {
     CMD_NONE,
@@ -69,7 +69,7 @@ typedef struct pcap_mbuff_slot {
 
 
 typedef struct pcap_storage {
-    _Atomic(pcap_mbuff_slot_t *) slots[PPR_MAX_PCAP_SLOTS];
+    _Atomic(pcap_mbuff_slot_t *) slots[WPR_MAX_PCAP_SLOTS];
     _Atomic uint32_t published_count;
 } pcap_storage_t;
 
