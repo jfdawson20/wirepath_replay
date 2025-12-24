@@ -564,7 +564,7 @@ void *run_pcap_loader_thread(void *arg) {
 
     while (!force_quit) {
 
-        while (ctl->command == CMD_NONE) {
+        while (ctl->command == CMD_NONE && !force_quit) {
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
             ts.tv_nsec += 200 * 1000 * 1000;  // 200 ms
@@ -573,12 +573,13 @@ void *run_pcap_loader_thread(void *arg) {
                 ts.tv_sec++;
                 ts.tv_nsec -= 1000000000;
             }
-            int rc = pthread_cond_timedwait(&ctl->cond, &ctl->lock, &ts);
+            pthread_cond_timedwait(&ctl->cond, &ctl->lock, &ts);
 
-            if (rc == ETIMEDOUT) {
-                // periodic wakeup -> re-check force_quit
-                continue;
-            }
+        }
+        
+        if (force_quit) {
+            pthread_mutex_unlock(&ctl->lock);
+            break;
         }
 
         if (ctl->command == CMD_EXIT) {
@@ -603,7 +604,6 @@ void *run_pcap_loader_thread(void *arg) {
             ctl->busy = false;
         }
 
-        /* Add CMD_APPLY_ACL_RULES handling here if desired */
     }
 
     WPR_LOG(WPR_LOG_INIT, RTE_LOG_INFO, "Pcap Loader Thread - Exiting\n");
