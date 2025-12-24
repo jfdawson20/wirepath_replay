@@ -1,0 +1,13 @@
+#Test configuration file for loading by the pcap replay application 
+
+#a pcap file path is always required, this is what you want to replay
+template:
+  pcap_filepath: "pcaps/test64_single.pcap"
+
+#acl rules are optional, this example shows modifying source IP address for matching packets
+acl_rules:
+  ip4:
+    - src: "192.168.1.100"
+      priority: 100
+      action:
+        default_policy: FLOW_ACT_MODIFY_SRCIP  
