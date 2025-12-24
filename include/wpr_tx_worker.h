@@ -28,6 +28,7 @@ Description: header file for tx worker code
 #include <limits.h>
 
 #include "wpr_pcap_loader.h"
+#include "wpr_mbuf_fields.h"
 
 #define CACHE_LINE 64
 #define BURST_SIZE_MAX  256
@@ -263,6 +264,121 @@ static inline uint64_t vc_field_rng(uint64_t seed,
     x ^= ((uint64_t)copy_idx << 32) | (uint64_t)flow_epoch;
     // run splitmix once to avalanche
     return splitmix64_next(&x);
+}
+
+static inline uint64_t
+wpr_slot_pkt_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t i, int mbuf_ts_off)
+{   
+    return slot->mbuf_array->pkts[i] ? my_ts_get(slot->mbuf_array->pkts[i], mbuf_ts_off) : UINT64_MAX;
+}
+
+static inline uint32_t
+lower_bound_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t n,
+                   uint64_t target_rel_ns, int mbuf_ts_off)
+{
+    uint32_t lo = 0, hi = n;
+    while (lo < hi) {
+        uint32_t mid = lo + ((hi - lo) >> 1);
+        uint64_t v = wpr_slot_pkt_rel_ns(slot, mid, mbuf_ts_off);
+        if (v < target_rel_ns) lo = mid + 1;
+        else hi = mid;
+    }
+    if (lo >= n) lo = n - 1;
+    return lo;
+}
+
+static inline void
+wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
+                         const wpr_port_stream_global_t *gcfg,
+                         const pcap_mbuff_slot_t *slot,
+                         int mbuf_ts_off,
+                         uint16_t port_idx,
+                         uint32_t slot_id,
+                         uint32_t gid,
+                         uint32_t vc_local_idx,
+                         uint32_t vc_count)
+{
+    const uint32_t n = (uint32_t)slot->numpackets;
+    vc->epoch = 0;
+    vc->flow_epoch = 0;
+
+    if (n == 0) {
+        vc->start_idx = vc->pcap_idx = 0;
+        vc->start_offset_ns = 0;
+        vc->base_rel_ns = 0;
+        return;
+    }
+
+    /* deterministic per-(port,slot,gid) */
+    uint64_t seed = ((uint64_t)gid << 32)
+                  ^ (uint64_t)slot_id
+                  ^ ((uint64_t)port_idx << 16)
+                  ^ (uint64_t)vc_local_idx;
+    uint64_t r = splitmix64_next(&seed);
+
+    /* base index for FIXED mode */
+    uint32_t base_idx = gcfg->stream_start_index;
+    if (base_idx >= n) base_idx = 0;
+
+    uint32_t start_idx = 0;
+    uint64_t start_offset_ns = 0;
+
+    if (gcfg->pace_mode == VC_PACE_PCAP_TS && gcfg->replay_window_ns > 0) {
+        const uint64_t window = gcfg->replay_window_ns;
+
+        /*
+         * Choose a phase in [0,window). Evenly space by vc_local_idx
+         * and add small deterministic jitter so they don't align perfectly.
+         */
+        uint64_t phase = (vc_count ? (window * (uint64_t)vc_local_idx) / (uint64_t)vc_count : 0);
+
+        uint64_t jitter_max = window / 100;            /* 1% */
+        uint64_t jitter = (jitter_max ? (r % jitter_max) : 0);
+
+        start_offset_ns = (phase + jitter) % window;
+
+        /*
+         * Choose start_idx as the first packet whose rel_ts >= start_offset_ns.
+         * This makes the "content" align with the chosen phase.
+         */
+        start_idx = lower_bound_rel_ns(slot, n, start_offset_ns, mbuf_ts_off);
+
+        /*
+         * Optional: if you want VC_START_FIXED_INDEX to bias the chosen start,
+         * you can instead search forward from base_idx for the first rel_ts >= start_offset_ns.
+         * Keep it simple for now.
+         */
+        (void)base_idx;
+    } else {
+        /*
+         * Unpaced: spread by packet index.
+         * - RANDOM_INDEX: pseudo-random
+         * - FIXED_INDEX: base + spacing
+         */
+        if (gcfg->start_mode == VC_START_RANDOM_INDEX) {
+            start_idx = (uint32_t)(r % n);
+        } else {
+            uint32_t stride = (vc_count ? (n / vc_count) : n);
+            if (stride == 0) stride = 1;
+
+            start_idx = (base_idx + vc_local_idx * stride) % n;
+            if (stride > 1) start_idx = (start_idx + (uint32_t)(r % stride)) % n;
+        }
+
+        start_offset_ns = 0;
+    }
+
+    vc->start_idx = start_idx;
+    vc->pcap_idx = start_idx;
+    vc->start_offset_ns = start_offset_ns;
+
+    /*
+     * CRITICAL: base_rel_ns must be the template timestamp at start_idx,
+     * because build_tx_burst does: rel = rel_ts - base_rel_ns.
+     */
+    uint64_t rel0 = wpr_slot_pkt_rel_ns(slot, start_idx, mbuf_ts_off);
+    if (rel0 == UINT64_MAX) rel0 = 0;
+    vc->base_rel_ns = rel0;
 }
 
 /** 

@@ -457,18 +457,22 @@ int run_tx_worker(__rte_unused void *arg) {
                     if (vc->global_client_id != gid) {
                         vc_materialize_identity(vc, &g->idp, port_idx, gid);
 
-                        /* Reset pacing state (simple semantics) */
                         vc->epoch = 0;
                         vc->flow_epoch = 0;
-
-                        /* You MUST also ensure start_idx/start_offset/base_rel_ns are set awpropriately.
-                        If you already have per-VC init logic, call it here.
-                        Minimal safe defaults:
-                        */
-                        vc->start_idx = 0;
-                        vc->pcap_idx = 0;
-                        vc->start_offset_ns = 0;
-                        vc->base_rel_ns = 0;
+                        pcap_mbuff_slot_t *slot = atomic_load_explicit(&thread_args->pcap_storage->slots[slot_id], memory_order_acquire);
+                        if(slot == NULL) {
+                            WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Invalid pcap slot %u for port index %u\n", slot_id, port_idx);
+                            continue;
+                        }
+                        wpr_vc_init_start_params(vc,
+                                                g,
+                                                slot,
+                                                port_idx,
+                                                slot_id,
+                                                gid,
+                                                /* vc_local_idx */ i,
+                                                /* vc_count */ count,
+                                                mbuf_ts_off);
                     }
                 }
 
