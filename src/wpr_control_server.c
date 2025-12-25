@@ -151,6 +151,12 @@ const wpr_cmd_def_t wpr_cmd_table[] = {
         .args_schema = "{port: str(port_name), num_vcs: int(number_of_active_vcs)}",
         .handler     = wpr_set_port_stream_vcs,
     },
+    {
+        .name        = "wpr_set_target_rate",
+        .description = "Set target rate for a given port stream",
+        .args_schema = "{port: str(port_name), target_kind: str('bps'|'pps'), target_value: float(target_value)}",
+        .handler     = wpr_set_target_rate,
+    },
 };
 
 

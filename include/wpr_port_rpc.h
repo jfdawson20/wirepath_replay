@@ -20,5 +20,6 @@
 int wpr_cmd_get_port_list(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
 int wpr_port_tx_ctl(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
 int wpr_set_port_stream_vcs(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
+int wpr_set_target_rate(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_args);
 
 #endif // WPR_PORT_RPC_H

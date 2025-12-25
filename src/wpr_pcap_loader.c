@@ -27,6 +27,10 @@ Description:
 #include <rte_errno.h>
 #include <rte_byteorder.h>
 #include <rte_log.h>
+#include <rte_hash.h>
+#include <rte_jhash.h>
+#include <rte_lcore.h>
+
 
 #include <errno.h>
 #include <string.h>
@@ -339,10 +343,36 @@ static inline void process_acl_lookup(wpr_acl_runtime_t *acl_runtime_ctx,
     }
 
 
-    return;
+    return; 
 
 }
 
+
+/** 
+* Fill native metrics for a pcap mbuf slot.    
+* @param slot
+*   Pointer to pcap mbuf slot structure.
+* @param unique_conns
+*   Number of unique connections in the pcap.
+**/
+static void wpr_pcap_fill_native_metrics(pcap_mbuff_slot_t *slot, uint64_t unique_conns)
+{
+    if (!slot) return;
+
+    uint64_t dur_ns = slot->delta_ns;
+    if (dur_ns == 0) dur_ns = 1; /* avoid divide-by-zero */
+
+    double dur_s = (double)dur_ns / 1e9;
+
+    slot->native_metrics.duration_ns   = slot->delta_ns;
+    slot->native_metrics.total_packets = slot->numpackets;
+    slot->native_metrics.total_bytes   = slot->size_in_bytes;
+    slot->native_metrics.unique_conns  = unique_conns;
+
+    slot->native_metrics.pps = (double)slot->numpackets / dur_s;
+    slot->native_metrics.bps = ((double)slot->size_in_bytes * 8.0) / dur_s;
+    slot->native_metrics.cps = (double)unique_conns / dur_s;
+}
 
 /*
  * Build a new slot privately and publish it.
@@ -350,16 +380,15 @@ static inline void process_acl_lookup(wpr_acl_runtime_t *acl_runtime_ctx,
  * - Reads PCAP, fills mbufs
  * - Publishes slot pointer atomically when complete
  */
-static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
-    if (!thread_args || !filename) 
+static int process_pcap(wpr_thread_args_t *thread_args, const char *filename)
+{
+    if (!thread_args || !filename)
         return -EINVAL;
 
     wpr_acl_rule_db_t *acl_db = thread_args->acl_rule_db;
     wpr_ports_t *global_port_list = thread_args->global_port_list;
-
-    if(!acl_db || !global_port_list){
+    if (!acl_db || !global_port_list)
         return -EINVAL;
-    }
 
     const uint8_t *data = NULL;
     struct pcap_pkthdr *hdr = NULL;
@@ -372,20 +401,21 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
     struct pcap_storage *st = thread_args->pcap_storage;
 
     /* Parse yaml file */
-    char *pcap_filepath_out=NULL;
-    rc = wpr_acl_load_startup_file(filename,acl_db,global_port_list,&pcap_filepath_out);
+    char *pcap_filepath_out = NULL;
+    rc = wpr_acl_load_startup_file(filename, acl_db, global_port_list, &pcap_filepath_out);
     if (rc < 0) {
         fprintf(stderr, "Failed to parse ACL YAML file %s: rc=%d\n", filename, rc);
         return rc;
     }
-    if (pcap_filepath_out == NULL || *pcap_filepath_out == '\0') {
+    if (!pcap_filepath_out || *pcap_filepath_out == '\0') {
         fprintf(stderr, "No pcap template filepath found in ACL YAML file %s\n", filename);
         return -EINVAL;
     }
 
     /* Open PCAP */
     char errbuf[PCAP_ERRBUF_SIZE] = {0};
-    pcap_t *pc = pcap_open_offline_with_tstamp_precision(pcap_filepath_out, PCAP_TSTAMP_PRECISION_NANO, errbuf);
+    pcap_t *pc = pcap_open_offline_with_tstamp_precision(
+        pcap_filepath_out, PCAP_TSTAMP_PRECISION_NANO, errbuf);
     if (!pc) {
         pc = pcap_open_offline(pcap_filepath_out, errbuf);
         if (!pc) {
@@ -396,18 +426,24 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
     }
     int prec = pcap_get_tstamp_precision(pc);
 
-
     /* Allocate slot id up front (monotonic). */
     unsigned int slotid = 0;
     int s_rc = pcap_storage_alloc_slotid(st, &slotid);
     if (s_rc != 0) {
         fprintf(stderr, "pcap_storage full (max=%u)\n", WPR_MAX_PCAP_SLOTS);
+        pcap_close(pc);
+        free(pcap_filepath_out);
         return s_rc;
     }
 
     /* Build mbuf array privately */
-    struct mbuf_array *mbuff_array = rte_zmalloc("mbuf_array", sizeof(*mbuff_array), RTE_CACHE_LINE_SIZE);
-    if (!mbuff_array) return -ENOMEM;
+    struct mbuf_array *mbuff_array =
+        rte_zmalloc("mbuf_array", sizeof(*mbuff_array), RTE_CACHE_LINE_SIZE);
+    if (!mbuff_array) {
+        pcap_close(pc);
+        free(pcap_filepath_out);
+        return -ENOMEM;
+    }
     mbuf_array_init(mbuff_array);
 
     /* Enforce Ethernet */
@@ -421,16 +457,45 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
         return -ENOTSUP;
     }
 
-    //commit acl rules to runtime before processing pcap
+    /* Commit ACL rules to runtime before processing pcap */
     rc = wpr_acl_db_commit(thread_args->acl_runtime, thread_args->acl_rule_db);
-    if (rc != 0){
+    if (rc != 0) {
         rte_exit(EXIT_FAILURE, "Failed to commit loaded ACL rules to runtime\n");
+    }
+
+    /* ---------------------------------------------------------------------
+     * Unique connection counting via rte_hash
+     * --------------------------------------------------------------------- */
+    uint64_t unique_conns = 0;
+
+    char hname[64];
+    snprintf(hname, sizeof(hname), "pcap_connset_%u_%u",
+             (unsigned)rte_gettid(), (unsigned)slotid);
+
+    struct rte_hash_parameters hp = {
+        .name = hname,
+        .entries = 1u << 20,                 /* 1,048,576 unique conns capacity (tune as needed) */
+        .key_len = sizeof(wpr_flow_key_t),   /* using your flow key directly */
+        .hash_func = rte_jhash,
+        .hash_func_init_val = 0,
+        .socket_id = rte_socket_id(),
+    };
+
+    struct rte_hash *connset = rte_hash_create(&hp);
+    if (!connset) {
+        fprintf(stderr, "rte_hash_create(connset) failed: %s\n", rte_strerror(rte_errno));
+        pcap_close(pc);
+        mbuf_array_free(mbuff_array);
+        rte_free(mbuff_array);
+        free(pcap_filepath_out);
+        return -ENOMEM;
     }
 
     bool have_first = false;
 
     while ((rc = pcap_next_ex(pc, &hdr, &data)) >= 0) {
-        if (rc == 0) continue;
+        if (rc == 0)
+            continue;
 
         uint64_t ns = ts_to_ns(hdr, prec);
         if (!have_first) {
@@ -443,22 +508,9 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
         total_bytes += caplen;
 
         struct rte_mbuf *m = rte_pktmbuf_alloc(mp);
-        if (unlikely(m->buf_addr == NULL)) {
-            free(pcap_filepath_out);
-            return -EINVAL;
-        }
-
-        //reset so we have a clean priv area
-        rte_pktmbuf_reset(m);
-
-        //set port to port 0 for now; actual port will be set by tx worker
-        m->port = 0;
-
-        //set the timestamp 
-        my_ts_set(m, thread_args->mbuf_ts_off, ns - first_ns);
-
-        if (append_bytes_to_mbuf(&m, mp, data, caplen) != 0) {
-            rte_pktmbuf_free(m);
+        if (!m) {
+            fprintf(stderr, "rte_pktmbuf_alloc failed\n");
+            rte_hash_free(connset);
             pcap_close(pc);
             mbuf_array_free(mbuff_array);
             rte_free(mbuff_array);
@@ -466,13 +518,31 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
             return -ENOMEM;
         }
 
-        
-        //parse header structure from packet
-        wpr_hdrs_t hdrs; 
+        rte_pktmbuf_reset(m);
+
+        /* set port to port 0 for now; actual port will be set by tx worker */
+        m->port = 0;
+
+        /* set the timestamp (relative to first packet) */
+        my_ts_set(m, thread_args->mbuf_ts_off, ns - first_ns);
+
+        if (append_bytes_to_mbuf(&m, mp, data, caplen) != 0) {
+            rte_pktmbuf_free(m);
+            rte_hash_free(connset);
+            pcap_close(pc);
+            mbuf_array_free(mbuff_array);
+            rte_free(mbuff_array);
+            free(pcap_filepath_out);
+            return -ENOMEM;
+        }
+
+        /* parse header structure from packet */
+        wpr_hdrs_t hdrs;
         rc = wpr_parse_headers(m, &hdrs);
         if (rc < 0) {
             WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Failed to parse headers for ACL lookup\n");
             rte_pktmbuf_free(m);
+            rte_hash_free(connset);
             pcap_close(pc);
             mbuf_array_free(mbuff_array);
             rte_free(mbuff_array);
@@ -480,44 +550,76 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
             return rc;
         }
 
-        //build flow keys 
+        /* build flow keys */
         bool l2_flowkey_valid = false;
         wpr_l2_flow_key_t l2_flow_key = {0};
-    
         rc = wpr_l2_flowkey_from_hdr(&hdrs, &l2_flow_key, slotid);
-        if (rc == 0){
+        if (rc == 0)
             l2_flowkey_valid = true;
-        }
 
         bool ip_flowkey_valid = false;
         wpr_flow_key_t ip_flow_key = {0};
-        rc = wpr_flowkey_from_hdr( &hdrs, &ip_flow_key, slotid);
-        if(rc == 0){
+        rc = wpr_flowkey_from_hdr(&hdrs, &ip_flow_key, slotid);
+        if (rc == 0)
             ip_flowkey_valid = true;
+
+        //tenant ID is overloaded to separate per mbuf slot rules, not used for actual multi-tenant so don't count. 
+        ip_flow_key.tenant_id = 0;
+        
+        if (ip_flowkey_valid) {
+            int add_rc = rte_hash_add_key(connset, &ip_flow_key);
+            if (add_rc >= 0) {
+                /* rte_hash_add_key returns >=0 on success (insert or existing key);
+                 * unfortunately it doesn't distinguish insert vs already exists.
+                 * So use add_key_data with a dummy pointer and check EEXIST via add_key_with_hash?
+                 *
+                 * Easiest reliable method: lookup first, then add.
+                 */
+            }
         }
 
-        if(!ip_flowkey_valid && !l2_flowkey_valid){
-            WPR_LOG(WPR_LOG_DP, RTE_LOG_INFO, "No valid flow keys could be built for ACL lookup\n");
+        /* Reliable unique count: lookup then add if missing */
+        if (ip_flowkey_valid) {
+            int look_rc = rte_hash_lookup(connset, &ip_flow_key);
+            if (look_rc < 0) {
+                int ins_rc = rte_hash_add_key(connset, &ip_flow_key);
+                if (ins_rc >= 0) {
+                    unique_conns++;
+                } else if (ins_rc != -EEXIST) {
+                    /* If the table fills, you can either stop counting or grow entries. */
+                    WPR_LOG(WPR_LOG_DP, RTE_LOG_WARNING,
+                            "connset insert failed rc=%d (unique_conns=%" PRIu64 ")\n",
+                            ins_rc, unique_conns);
+                }
+            }
         }
-        //process acl lookup and populate mbuf priv area
+
+        if (!ip_flowkey_valid && !l2_flowkey_valid) {
+            WPR_LOG(WPR_LOG_DP, RTE_LOG_INFO,
+                    "No valid flow keys could be built for ACL lookup\n");
+        }
+
+        /* process acl lookup and populate mbuf priv area */
         process_acl_lookup(thread_args->acl_runtime,
                            acl_db,
                            m,
                            &hdrs,
                            ip_flowkey_valid,
-                           &ip_flow_key,
+                           ip_flowkey_valid ? &ip_flow_key : NULL,
                            l2_flowkey_valid,
-                           &l2_flow_key,
+                           l2_flowkey_valid ? &l2_flow_key : NULL,
                            thread_args->thread_index);
-       
 
         mbuf_array_push(mbuff_array, m);
     }
 
+    /* done reading packets */
     pcap_close(pc);
+    rte_hash_free(connset);
 
     /* Build the slot privately */
-    struct pcap_mbuff_slot *slot = rte_zmalloc("pcap_mbuff_slot", sizeof(*slot), RTE_CACHE_LINE_SIZE);
+    struct pcap_mbuff_slot *slot =
+        rte_zmalloc("pcap_mbuff_slot", sizeof(*slot), RTE_CACHE_LINE_SIZE);
     if (!slot) {
         mbuf_array_free(mbuff_array);
         rte_free(mbuff_array);
@@ -534,6 +636,9 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
     slot->size_in_bytes = total_bytes;
     slot->mode          = UNASSIGNED;
 
+    /* Fill native metrics (pps/bps/cps) */
+    wpr_pcap_fill_native_metrics(slot, unique_conns);
+
     /* Publish the slot pointer atomically.
      * After this point, do not mutate slot or mbuff_array fields.
      */
@@ -541,6 +646,7 @@ static int process_pcap(wpr_thread_args_t *thread_args, const char *filename) {
 
     /* Update controller visible latest slot id */
     thread_args->pcap_controller->latest_slotid = slotid;
+
     free(pcap_filepath_out);
     return 0;
 }
@@ -576,7 +682,7 @@ void *run_pcap_loader_thread(void *arg) {
             pthread_cond_timedwait(&ctl->cond, &ctl->lock, &ts);
 
         }
-        
+
         if (force_quit) {
             pthread_mutex_unlock(&ctl->lock);
             break;

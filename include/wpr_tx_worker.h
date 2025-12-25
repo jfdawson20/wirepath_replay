@@ -25,6 +25,7 @@ Description: header file for tx worker code
 #include <rte_per_lcore.h>
 #include <rte_ethdev.h>
 #include <rte_mempool.h>
+#include <rte_malloc.h>
 #include <limits.h>
 
 #include "wpr_pcap_loader.h"
@@ -266,14 +267,26 @@ static inline uint64_t vc_field_rng(uint64_t seed,
     return splitmix64_next(&x);
 }
 
-static inline uint64_t
-wpr_slot_pkt_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t i, int mbuf_ts_off)
+/** 
+* Get the relative timestamp in nanoseconds from an mbuf's private area
+* @param m Pointer to the mbuf
+* @param mbuf_ts_off Offset of the timestamp field in the mbuf private area
+* @return Relative timestamp in nanoseconds
+**/
+static inline uint64_t wpr_slot_pkt_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t i, int mbuf_ts_off)
 {   
     return slot->mbuf_array->pkts[i] ? my_ts_get(slot->mbuf_array->pkts[i], mbuf_ts_off) : UINT64_MAX;
 }
 
-static inline uint32_t
-lower_bound_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t n,
+/** 
+* Find the lower bound index for a target relative timestamp in a pcap slot
+* @param slot Pointer to the pcap mbuf slot
+* @param n Number of packets in the slot
+* @param target_rel_ns Target relative timestamp in nanoseconds
+* @param mbuf_ts_off Offset of the timestamp field in the mbuf private area
+* @return Index of the first packet with a relative timestamp >= target_rel_ns
+**/
+static inline uint32_t lower_bound_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t n,
                    uint64_t target_rel_ns, int mbuf_ts_off)
 {
     uint32_t lo = 0, hi = n;
@@ -287,6 +300,18 @@ lower_bound_rel_ns(const pcap_mbuff_slot_t *slot, uint32_t n,
     return lo;
 }
 
+
+/** 
+* Initialize virtual client start parameters
+* @param vc Pointer to the virtual client context
+* @param gcfg Pointer to the global port stream configuration
+* @param slot Pointer to the pcap mbuf slot assigned to this port
+* @param mbuf_ts_off Offset of the timestamp field in the mbuf dynfield area
+* @param port_idx Port index for salting
+* @param gid Global unique client ID
+* @param vc_local_idx Local index of this VC within the port stream
+* @param vc_count Total number of VCs in the port stream    
+**/
 static inline void wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
                          const wpr_port_stream_global_t *gcfg,
                          const pcap_mbuff_slot_t *slot,
@@ -422,8 +447,6 @@ static inline uint16_t pick_u16(uint64_t r, uint16_t lo, uint16_t hi) {
     uint32_t span = (hi >= lo) ? (uint32_t)(hi - lo + 1) : 1;
     return (uint16_t)(lo + (uint16_t)(r % span));
 }
-
-
 
 int run_tx_worker(__rte_unused void *arg);
 
