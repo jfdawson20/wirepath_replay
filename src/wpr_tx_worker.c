@@ -403,6 +403,18 @@ int run_tx_worker(__rte_unused void *arg) {
                 continue;
             }
 
+            uint64_t run_gen = atomic_load_explicit(&g->run_gen, memory_order_acquire);
+            if (unlikely(run_gen != port_stream_ctx->last_run_gen)) {
+                /* New enable/run: rewind per-VC replay state */
+                port_stream_ctx->rr_next_client = 0;
+
+                /* Force re-init path below to run (even if slice didn't change) */
+                port_stream_ctx->last_start_gid = UINT32_MAX;
+                port_stream_ctx->last_count = UINT32_MAX;
+
+                port_stream_ctx->last_run_gen = run_gen;
+            }
+
             uint64_t elapsed    = now_ns - atomic_load_explicit(&g->global_start_ns, memory_order_acquire);
             uint64_t epoch      = 0;
             uint64_t phase      = 0;

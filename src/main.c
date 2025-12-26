@@ -435,8 +435,10 @@ int main(int argc, char **argv) {
         g->pace_mode = VC_PACE_NONE;
         g->start_mode = VC_START_FIXED_INDEX;
 
-        g->global_start_ns = 0;
+        atomic_store_explicit(&g->global_start_ns, 0, memory_order_release);
         g->replay_window_ns = 0;
+
+        atomic_store_explicit(&g->run_gen, 0, memory_order_release);
 
         //initialize the idp struct
         // src: 10.(port_idx).0.1  .. 10.(port_idx).255.254

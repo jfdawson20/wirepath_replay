@@ -136,10 +136,12 @@ int wpr_port_tx_ctl(json_t *reply_root, json_t *args, wpr_thread_args_t *thread_
     //process command 
     if (strcmp(cmd_str, "enable") == 0){
         atomic_store_explicit(&port_streams[global_port_index].global_start_ns, wpr_now_ns(), memory_order_release);
+        atomic_fetch_add_explicit(&port_streams[global_port_index].run_gen, 1, memory_order_acq_rel);
         atomic_store_explicit(&port_entry->tx_enabled, true, memory_order_release); 
     }
     else if (strcmp(cmd_str, "disable") == 0){
         atomic_store_explicit(&port_entry->tx_enabled, false, memory_order_release); 
+        atomic_fetch_add_explicit(&port_streams[global_port_index].run_gen, 1, memory_order_acq_rel);
         atomic_store_explicit(&port_streams[global_port_index].global_start_ns, wpr_now_ns(), memory_order_release);
     }
     else {

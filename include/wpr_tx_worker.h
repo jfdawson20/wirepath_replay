@@ -122,6 +122,8 @@ typedef struct wpr_port_stream_global {
     _Atomic uint64_t global_start_ns;
     uint64_t replay_window_ns;    // period
 
+    _Atomic uint64_t run_gen;
+
     wpr_vc_identity_profile_t idp;
 } wpr_port_stream_global_t;
 
@@ -132,6 +134,7 @@ typedef struct __attribute__((aligned(64))) wpr_port_stream_ctx {
     uint32_t num_clients;
     uint32_t last_start_gid;
     uint32_t last_count;
+    uint64_t last_run_gen;
 
     //global port stream config pointer
     wpr_port_stream_global_t *global_cfg;
