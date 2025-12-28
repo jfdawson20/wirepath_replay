@@ -2,7 +2,7 @@
 
 #a pcap file path is always required, this is what you want to replay
 template:
-  pcap_filepath: "pcaps/wpr_test_ipv4_tcp_64B_1000pkts_1s.pcap"
+  pcap_filepath: "pcaps/wpr_test_ipv4_tcp_256B_1000pkts_1s.pcap"
 
 #acl rules are optional, this example shows modifying source IP address for matching packets
 acl_rules:
