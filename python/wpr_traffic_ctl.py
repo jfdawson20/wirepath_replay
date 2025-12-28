@@ -336,6 +336,7 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
         "Native PPS",
         "Native BPS",
         "Native CPS",
+        "Native Unique Conns",
         "Mode",
         "Last Tune",
         "Tune Target",
@@ -360,6 +361,7 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
         native_pps = s.get("native_pps", "")
         native_bps = s.get("native_bps", "")
         native_cps = s.get("native_cps", "")
+        native_unique_conns = s.get("native_unique_conns", "")
 
         # Autotune metadata
         tune_kind   = s.get("last_autotune_kind", "")
@@ -376,6 +378,7 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
             _fmt_rate(native_pps, "pps"),
             _fmt_rate(native_bps, "bps"),
             _fmt_rate(native_cps, "cps"),
+            _fmt_int(native_unique_conns),
             mode,
             tune_kind,
             _fmt_rate(tune_target, ""),
