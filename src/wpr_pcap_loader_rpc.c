@@ -89,6 +89,7 @@ int wpr_get_loaded_pcaps_list(json_t *reply_root, json_t *args, wpr_thread_args_
         json_object_set_new(pcap_info, "native_pps", json_real(slot->native_metrics.pps));
         json_object_set_new(pcap_info, "native_bps", json_real(slot->native_metrics.bps));
         json_object_set_new(pcap_info, "native_cps", json_real(slot->native_metrics.cps));
+        json_object_set_new(pcap_info, "native_unique_conns", json_integer((json_int_t)slot->native_metrics.unique_conns));
 
         //add last autotune info
         json_object_set_new(pcap_info, "last_autotune_kind", json_integer((json_int_t)slot->last_autotune.kind));
