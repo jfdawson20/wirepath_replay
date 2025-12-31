@@ -30,6 +30,7 @@ Description: header file for tx worker code
 
 #include "wpr_pcap_loader.h"
 #include "wpr_mbuf_fields.h"
+#include "wpr_tx_encap.h"
 
 #define CACHE_LINE 64
 #define BURST_SIZE_MAX  256
@@ -124,6 +125,10 @@ typedef struct wpr_port_stream_global {
 
     _Atomic uint64_t run_gen;
 
+    //encap config for this port stream
+    wpr_tx_encap_cfg_t encap_cfg;
+    _Atomic uint64_t   encap_gen;
+
     wpr_vc_identity_profile_t idp;
 } wpr_port_stream_global_t;
 
@@ -141,6 +146,11 @@ typedef struct __attribute__((aligned(64))) wpr_port_stream_ctx {
 
     // pacing / scheduling knobs
     uint32_t rr_next_client;      // round-robin pointer
+
+    //encap control per port stream
+    wpr_tx_encap_compiled_t encap_compiled;
+    uint64_t last_encap_gen;
+    
 } wpr_port_stream_ctx_t;
 
 

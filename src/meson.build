@@ -17,7 +17,8 @@ srcs = files(
   'wpr_acl_rpc.c',
   'wpr_acl_yaml.c',
   'wpr_header_extract.c',
-  'wpr_config.c'
+  'wpr_config.c',
+  'wpr_tx_encap.c',
 )
 
 executable(

@@ -274,6 +274,8 @@ static bool wpr_modify_mbuf(struct rte_mbuf *m, const wpr_vc_ctx_t *vc)
 *   Pointer to the virtual client context.
 * @param phase
 *   Current phase time for pacing.
+* @param dpdk_port_id
+*   DPDK port ID for encapsulation decisions.
 * @return
 *   Number of packets added to the burst.
 **/
@@ -285,7 +287,8 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
                struct rte_mempool *tx_pool,
                wpr_port_stream_ctx_t *psc,
                wpr_vc_ctx_t *vc,
-               uint64_t phase) 
+               uint64_t phase,
+               uint16_t dpdk_port_id) 
 {
     uint16_t nb = 0;
 
@@ -331,7 +334,14 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
             continue;
         }
 
-        tx_pkts[nb++] = c;
+        //apply any encapsulation
+        struct rte_mbuf *out = wpr_tx_encap_apply(c, &psc->encap_compiled, tx_pool, dpdk_port_id);
+        if (unlikely(out == NULL)) {
+            rte_pktmbuf_free(c);
+            continue;
+        }
+
+        tx_pkts[nb++] = out;
         vc->pcap_idx++;
     }
     return nb;
@@ -431,7 +441,22 @@ int run_tx_worker(__rte_unused void *arg) {
                 phase = elapsed % g->replay_window_ns;
 
             }
-    
+            
+            //process any changes to the encap config
+            uint64_t encap_gen = atomic_load_explicit(&g->encap_gen, memory_order_acquire);
+            if (unlikely(encap_gen != port_stream_ctx->last_encap_gen)) {
+                /* Copy cfg snapshot (avoid tearing if writer updates fields) */
+                wpr_tx_encap_cfg_t cfg = g->encap_cfg; /* if you need stronger safety, guard updates with a lock */
+
+                char err[128];
+                if (wpr_tx_encap_compile(&cfg, &port_stream_ctx->encap_compiled, err, sizeof(err)) != 0) {
+                    /* If compile fails, treat as disabled so you still transmit. */
+                    port_stream_ctx->encap_compiled.enabled = false;
+                    WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "encap compile failed port=%u: %s\n", port_idx, err);
+                }
+                port_stream_ctx->last_encap_gen = encap_gen;
+            }
+
             /* ---------------------------------- Iterate over all virtual clients for this port ----------------------*/
             
             /* Total active VCs for this port stream */
@@ -515,7 +540,7 @@ int run_tx_worker(__rte_unused void *arg) {
                 uint16_t nb = build_tx_burst(tx_pkts, BURST_SIZE_MAX, thread_args->pcap_storage,
                                             slot_id,
                                             mbuf_ts_off, tx_pool,
-                                            port_stream_ctx, vc, phase);
+                                            port_stream_ctx, vc, phase, dpdk_port_id);
 
                 if (nb) {
                     uint16_t sent = rte_eth_tx_burst(dpdk_port_id, tx_queue_id, tx_pkts, nb);
