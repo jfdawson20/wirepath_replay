@@ -1,0 +1,68 @@
+#vxlan: 
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type vxlan \
+  --outer-src-mac 02:aa:bb:cc:dd:01 --outer-dst-mac 02:aa:bb:cc:dd:02 \
+  --outer-src-ip 10.0.0.1 --outer-dst-ip 10.0.0.2 \
+  --outer-ttl 64 --outer-dscp 0 --outer-df \
+  --vni 12345 \
+  --udp-dst-port 4789 \
+  --udp-srcport-mode fixed --udp-src-port 5555
+
+
+#vxlan with underlay VLAN tag on outer ethernet: 
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type vxlan \
+  --outer-src-mac 02:aa:bb:cc:dd:01 --outer-dst-mac 02:aa:bb:cc:dd:02 \
+  --outer-src-ip 10.0.0.1 --outer-dst-ip 10.0.0.2 \
+  --outer-vlan-mode 8021q --outer-vlan-id 100 --outer-vlan-pcp 0 --outer-vlan-dei 0 \
+  --vni 12345 --udp-dst-port 4789 --udp-srcport-mode fixed --udp-src-port 5555
+
+
+#GRE (TEB / Ethernet-over-GRE):
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type gre \
+  --outer-src-mac 02:aa:bb:cc:dd:01 --outer-dst-mac 02:aa:bb:cc:dd:02 \
+  --outer-src-ip 10.1.0.1 --outer-dst-ip 10.1.0.2 \
+  --gre-teb-mode
+
+#GRE With Key+Sequence 
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type gre \
+  --outer-src-mac 02:aa:bb:cc:dd:01 --outer-dst-mac 02:aa:bb:cc:dd:02 \
+  --outer-src-ip 10.1.0.1 --outer-dst-ip 10.1.0.2 \
+  --gre-teb-mode \
+  --gre-key 0x12345678 \
+  --gre-seq-start 1
+
+
+#QinQ with S-Tag + C-Tag 
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type qinq \
+  --qinq-mode push \
+  --s-vlan-id 100 --s-pcp 0 --s-dei 0 \
+  --c-vlan-id 200 --c-pcp 0 --c-dei 0
+
+#QinQ only push if packet is untagged 
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type qinq \
+  --qinq-mode push_if_untagged \
+  --s-vlan-id 100 --c-vlan-id 200
+
+
+#ERSPAN Type 2 
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type erspan \
+  --outer-src-mac 02:aa:bb:cc:dd:01 --outer-dst-mac 02:aa:bb:cc:dd:02 \
+  --outer-src-ip 10.2.0.1 --outer-dst-ip 10.2.0.2 \
+  --erspan-type II \
+  --session-id 7
+
+
+#ERSPAN Type 3 (with GRE Sequence)
+./wpr_traffic_ctl.py encap-set --portname port0 \
+  --type erspan \
+  --outer-src-mac 02:aa:bb:cc:dd:01 --outer-dst-mac 02:aa:bb:cc:dd:02 \
+  --outer-src-ip 10.2.0.1 --outer-dst-ip 10.2.0.2 \
+  --erspan-type III \
+  --session-id 7 \
+  --erspan-seq-start 1
