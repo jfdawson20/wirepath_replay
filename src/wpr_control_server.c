@@ -40,6 +40,7 @@ wpr_server is the primary control interface for the WPR application, allowing ex
 #include "wpr_port_rpc.h"
 #include "wpr_acl_rpc.h"
 #include "wpr_pcap_loader_rpc.h"
+#include "wpr_tx_encap_rpc.h"
 
 /* API function Defs */
 //general commands
@@ -156,6 +157,26 @@ const wpr_cmd_def_t wpr_cmd_table[] = {
         .description = "Set target rate for a given port stream",
         .args_schema = "{port: str(port_name), target_kind: str('bps'|'pps'), target_value: float(target_value)}",
         .handler     = wpr_set_target_rate,
+    },
+
+    /* -------------------------- Tx Encap Commands ----------------------------------- */
+    {
+        .name        = "wpr_tx_encap_set",
+        .description = "Set the TX encapsulation configuration for a port stream",
+        .args_schema = "{}",
+        .handler     = wpr_tx_encap_set,
+    },
+    {
+        .name        = "wpr_tx_encap_get",
+        .description = "Get the TX encapsulation configuration for a port stream",
+        .args_schema = "{}",
+        .handler     = wpr_tx_encap_get,
+    },
+    {
+        .name        = "wpr_tx_encap_clear",
+        .description = "Clear the TX encapsulation configuration for a port stream",
+        .args_schema = "{}",
+        .handler     = wpr_tx_encap_clear,
     },
 };
 
