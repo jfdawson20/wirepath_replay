@@ -472,6 +472,10 @@ int main(int argc, char **argv) {
         g->idp.dst_mac_base[5] = 0x00;
 
         g->idp.mac_stride = 1;
+
+        //encap init 
+        g->encap_cfg = (wpr_tx_encap_cfg_t){0};
+        atomic_store_explicit(&g->encap_gen, 0, memory_order_release);
     }   
 
 
@@ -506,6 +510,8 @@ int main(int argc, char **argv) {
             port_stream->global_cfg = &port_stream_global_cfg[port_idx];
             port_stream->rr_next_client = 0;
 
+            port_stream->encap_compiled = (wpr_tx_encap_compiled_t){0};
+            port_stream->last_encap_gen = 0;
 
             //initialize port map per worker 
             wpr_port_worker_map_t *map = &tx_worker_ctx_array[core_idx]->map_by_port[port_idx];

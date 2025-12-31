@@ -10,12 +10,19 @@ Commands implemented (from your C RPC table):
   - wpr_assign_port_slot
   - wpr_cmd_get_port_list
   - wpr_port_tx_ctl
+  - wpr_set_port_stream_vcs
+  - wpr_set_target_rate
+
+New (tx encap):
+  - wpr_tx_encap_set
+  - wpr_tx_encap_clear
+  - wpr_tx_encap_get
 """
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+import re
 from typing import Any, Dict, List, Optional
 
 from prettytable import PrettyTable
@@ -37,7 +44,9 @@ CMD_PORT_TX_CTL = "wpr_port_tx_ctl"
 CMD_SET_PORT_STREAM_VCS = "wpr_set_port_stream_vcs"
 CMD_SET_TARGET_RATE = "wpr_set_target_rate"
 
-
+CMD_TX_ENCAP_SET = "wpr_tx_encap_set"
+CMD_TX_ENCAP_CLEAR = "wpr_tx_encap_clear"
+CMD_TX_ENCAP_GET = "wpr_tx_encap_get"
 
 
 # ---------------------------------------------------------------------------
@@ -45,28 +54,22 @@ CMD_SET_TARGET_RATE = "wpr_set_target_rate"
 # ---------------------------------------------------------------------------
 
 PACE_MODE_NAME_TO_ID: Dict[str, int] = {
-    # These are placeholders; update if you have specific C enum values.
+    # Placeholders; update to match your C enum values if you want name support.
     "disabled": 0,
     "asap": 0,
     "realtime": 1,
     "pps": 2,
 }
+
 START_MODE_NAME_TO_ID: Dict[str, int] = {
-    # Placeholders; update to your C enum values.
+    # Placeholders; update to match your C enum values if you want name support.
     "immediate": 0,
     "armed": 1,
     "manual": 2,
 }
 
 
-def _maybe_int(s: Optional[str]) -> Optional[int]:
-    if s is None:
-        return None
-    return int(s, 0) if isinstance(s, str) else int(s)
-
-
 def _resolve_pace_mode(value: str) -> int:
-    # allow int like "2" or "0x2"
     try:
         return int(value, 0)
     except ValueError:
@@ -100,11 +103,57 @@ def _as_list(x: Any) -> List[Any]:
     return [x]
 
 
+_PORT_RE = re.compile(r"^port(\d+)$", re.IGNORECASE)
+
+
+def _port_index_from_name(portname: str) -> Optional[int]:
+    """
+    Best-effort: 'port0' -> 0
+    Returns None if it doesn't match.
+    """
+    if not portname:
+        return None
+    m = _PORT_RE.match(portname.strip())
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _pick_port_index(port_index: Optional[int], portname: Optional[str]) -> int:
+    if port_index is not None:
+        return int(port_index)
+    if portname:
+        pi = _port_index_from_name(portname)
+        if pi is not None:
+            return pi
+    raise ValueError("Must provide --port-index or a --portname like 'port0'.")
+
+
+def _fmt_bytes(n: Any) -> Any:
+    try:
+        n = int(n)
+    except Exception:
+        return n
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}PB"
+
+
+def _fmt_ns(ns: Any) -> Any:
+    try:
+        ns = int(ns)
+    except Exception:
+        return ns
+    return f"{ns / 1e9:.6f}s"
+
+
 # ---------------------------------------------------------------------------
 # High-level client wrapper
 # ---------------------------------------------------------------------------
 
-class PprTrafficClient:
+class WprTrafficClient:
     """
     High-level wrapper around Traffic / PCAP replay JSON-RPC commands.
     """
@@ -164,6 +213,18 @@ class PprTrafficClient:
         }
         return self.ctl.call(CMD_SET_TARGET_RATE, args=payload)
 
+    # ---------------- tx encap ----------------
+
+    def tx_encap_set(self, port_index: int, encap_args: Dict[str, Any]) -> Dict[str, Any]:
+        payload = {"port_index": int(port_index)}
+        payload.update(encap_args)
+        return self.ctl.call(CMD_TX_ENCAP_SET, args=payload)
+
+    def tx_encap_clear(self, port_index: int) -> Dict[str, Any]:
+        return self.ctl.call(CMD_TX_ENCAP_CLEAR, args={"port_index": int(port_index)})
+
+    def tx_encap_get(self, port_index: int) -> Dict[str, Any]:
+        return self.ctl.call(CMD_TX_ENCAP_GET, args={"port_index": int(port_index)})
 
 
 # ---------------------------------------------------------------------------
@@ -171,42 +232,18 @@ class PprTrafficClient:
 # ---------------------------------------------------------------------------
 
 def display_ports(reply: Dict[str, Any]) -> None:
-    """
-    Render port list for replies shaped like:
-
-      {
-        "port_list": {
-          "port0": { ... },
-          "port1": { ... }
-        },
-        "status": "success"
-      }
-
-    Where port_list is a dict keyed by port name.
-    """
     port_list = reply.get("port_list", {})
 
     t = PrettyTable()
-    t.field_names = [
-        "Port",
-        "Port ID",
-        "External",
-        "Dir",
-        "RXQs",
-        "TXQs",
-        "RXQ->Core",
-        "TXQ->Core",
-    ]
+    t.field_names = ["Port", "Port ID", "External", "Dir", "RXQs", "TXQs", "RXQ->Core", "TXQ->Core"]
 
     if not isinstance(port_list, dict) or not port_list:
         print("Ports: (none)")
-        # still show status if present
         if "status" in reply:
             print(f"status: {reply.get('status')}")
         print("")
         return
 
-    # stable ordering: port0, port1, ... if names match; otherwise lexicographic
     def _sort_key(k: str):
         if k.startswith("port") and k[4:].isdigit():
             return (0, int(k[4:]))
@@ -226,7 +263,6 @@ def display_ports(reply: Dict[str, Any]) -> None:
         total_rx = p.get("total_rx_queues", "")
         total_tx = p.get("total_tx_queues", "")
 
-        # summarize queue->core mappings
         rxq_map = []
         for q in p.get("rx_queues", []) or []:
             if not isinstance(q, dict):
@@ -234,6 +270,7 @@ def display_ports(reply: Dict[str, Any]) -> None:
             qi = q.get("queue_index", "")
             core = q.get("assigned_worker_core", "")
             rxq_map.append(f"{qi}:{core}")
+
         txq_map = []
         for q in p.get("tx_queues", []) or []:
             if not isinstance(q, dict):
@@ -242,16 +279,7 @@ def display_ports(reply: Dict[str, Any]) -> None:
             core = q.get("assigned_worker_core", "")
             txq_map.append(f"{qi}:{core}")
 
-        t.add_row([
-            name,
-            port_id,
-            is_external,
-            direction,
-            total_rx,
-            total_tx,
-            ",".join(rxq_map),
-            ",".join(txq_map),
-        ])
+        t.add_row([name, port_id, is_external, direction, total_rx, total_tx, ",".join(rxq_map), ",".join(txq_map)])
 
     print("Ports:")
     print(t)
@@ -260,46 +288,7 @@ def display_ports(reply: Dict[str, Any]) -> None:
     print("")
 
 
-
-from typing import Any, Dict
-from prettytable import PrettyTable
-
-
-def _as_list(v):
-    if v is None:
-        return []
-    if isinstance(v, list):
-        return v
-    return [v]
-
-
-def _fmt_bytes(n):
-    try:
-        n = int(n)
-    except Exception:
-        return n
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.1f}{unit}"
-        n /= 1024
-    return f"{n:.1f}PB"
-
-
-def _fmt_ns(ns):
-    try:
-        ns = int(ns)
-    except Exception:
-        return ns
-    return f"{ns / 1e9:.6f}s"
-
-
 def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
-    """
-    Render loaded pcaps list with rate + autotune metadata.
-
-    Backwards-compatible with older shapes.
-    """
-
     def _fmt_rate(v, unit):
         if v in ("", None):
             return ""
@@ -328,20 +317,9 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
 
     t = PrettyTable()
     t.field_names = [
-        "Slot",
-        "PCAP",
-        "Pkts",
-        "Size",
-        "Δ Time",
-        "Native PPS",
-        "Native BPS",
-        "Native CPS",
-        "Native Unique Conns",
-        "Mode",
-        "Last Tune",
-        "Tune Target",
-        "Chosen VC",
-        "Predicted",
+        "Slot", "PCAP", "Pkts", "Size", "Δ Time",
+        "Native PPS", "Native BPS", "Native CPS", "Native Unique Conns",
+        "Mode", "Last Tune", "Tune Target", "Chosen VC", "Predicted",
     ]
 
     for s in slots:
@@ -349,7 +327,6 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
             t.add_row(["", str(s)] + [""] * (len(t.field_names) - 2))
             continue
 
-        # Core identity
         slotid   = s.get("slotid", s.get("slot_id", s.get("id", "")))
         name     = s.get("pcap_name", s.get("filename", s.get("file", "")))
         packets  = s.get("pcap_packets", s.get("packets", ""))
@@ -357,13 +334,11 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
         delta_ns = s.get("delta_ns", "")
         mode     = s.get("mode", "")
 
-        # Native rates
         native_pps = s.get("native_pps", "")
         native_bps = s.get("native_bps", "")
         native_cps = s.get("native_cps", "")
         native_unique_conns = s.get("native_unique_conns", "")
 
-        # Autotune metadata
         tune_kind   = s.get("last_autotune_kind", "")
         tune_target = s.get("last_autotune_target", "")
         tune_vc     = s.get("last_autotune_chosen_vc", "")
@@ -391,8 +366,6 @@ def display_loaded_pcaps(reply: Dict[str, Any]) -> None:
     print("")
 
 
-
-
 def display_generic_reply(title: str, reply: Dict[str, Any]) -> None:
     t = PrettyTable()
     t.field_names = ["Key", "Value"]
@@ -401,6 +374,156 @@ def display_generic_reply(title: str, reply: Dict[str, Any]) -> None:
     print(f"{title}:")
     print(t)
     print("")
+
+
+def display_encap_reply(title: str, reply: Dict[str, Any]) -> None:
+    """
+    Pretty print common keys returned by your encap RPCs:
+      ok, rc, error, port_index, port_id, encap_type, compiled_hdr_len, wire_overhead_bytes, encap_gen, encap_cfg
+    """
+    t = PrettyTable()
+    t.field_names = ["Key", "Value"]
+    prefer = [
+        "ok", "rc", "error",
+        "port_index", "port_id",
+        "encap_type", "compiled_hdr_len", "wire_overhead_bytes",
+        "encap_gen",
+        "encap_cfg",
+    ]
+    used = set()
+    for k in prefer:
+        if k in reply:
+            t.add_row([k, reply[k]])
+            used.add(k)
+    for k in sorted(reply.keys()):
+        if k not in used:
+            t.add_row([k, reply[k]])
+    print(f"{title}:")
+    print(t)
+    print("")
+
+
+# ---------------------------------------------------------------------------
+# Encap payload builder (CLI -> JSON dict for RPC)
+# ---------------------------------------------------------------------------
+
+def build_encap_payload_from_cli(a: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Build the args dict expected by wpr_tx_encap_set.
+    """
+    encap_type = (a.type or "none").strip().lower()
+
+    payload: Dict[str, Any] = {
+        "enabled": (not a.disable) and (encap_type != "none"),
+        "type": encap_type,
+        "mode": a.mode,
+        "oversize_policy": a.oversize_policy,
+        "outer_csum_hw_offload": bool(a.outer_csum_hw_offload),
+    }
+
+    if a.max_inner_l2_len is not None:
+        payload["max_inner_l2_len"] = int(a.max_inner_l2_len)
+
+    # QinQ (L2 surgery) does not require an "outer" block
+    needs_outer = encap_type in ("vxlan", "gre", "erspan")
+    if needs_outer:
+        if not (a.outer_src_mac and a.outer_dst_mac and a.outer_src_ip and a.outer_dst_ip):
+            raise ValueError("For vxlan/gre/erspan you must set --outer-src-mac/--outer-dst-mac/--outer-src-ip/--outer-dst-ip")
+
+        outer: Dict[str, Any] = {
+            "src_mac": a.outer_src_mac,
+            "dst_mac": a.outer_dst_mac,
+            "src_ip": a.outer_src_ip,
+            "dst_ip": a.outer_dst_ip,
+            "ttl": int(a.outer_ttl),
+            "dscp": int(a.outer_dscp),
+            "df": bool(a.outer_df),
+        }
+
+        # Optional outer VLAN for underlay
+        if a.outer_vlan_mode and a.outer_vlan_mode != "none":
+            ov: Dict[str, Any] = {
+                "enabled": True,
+                "mode": a.outer_vlan_mode,
+            }
+            if a.outer_vlan_mode == "8021q":
+                if a.outer_vlan_id is None:
+                    raise ValueError("--outer-vlan-id is required when --outer-vlan-mode=8021q")
+                ov.update({
+                    "vlan_id": int(a.outer_vlan_id),
+                    "pcp": int(a.outer_vlan_pcp),
+                    "dei": int(a.outer_vlan_dei),
+                })
+            elif a.outer_vlan_mode == "qinq":
+                if a.outer_s_vlan_id is None or a.outer_c_vlan_id is None:
+                    raise ValueError("--outer-s-vlan-id and --outer-c-vlan-id are required when --outer-vlan-mode=qinq")
+                ov.update({
+                    "s_vlan_id": int(a.outer_s_vlan_id),
+                    "s_pcp": int(a.outer_s_vlan_pcp),
+                    "s_dei": int(a.outer_s_vlan_dei),
+                    "c_vlan_id": int(a.outer_c_vlan_id),
+                    "c_pcp": int(a.outer_c_vlan_pcp),
+                    "c_dei": int(a.outer_c_vlan_dei),
+                })
+            outer["outer_vlan"] = ov
+
+        payload["outer"] = outer
+
+    # Per-type blocks
+    if encap_type == "vxlan":
+        if a.vni is None:
+            raise ValueError("--vni is required for vxlan")
+        payload["vxlan"] = {
+            "vni": int(a.vni),
+            "udp_dst_port": int(a.udp_dst_port),
+            "udp_srcport_mode": a.udp_srcport_mode,
+            "udp_src_port": int(a.udp_src_port),
+            "udp_checksum": bool(a.udp_checksum),
+        }
+
+    elif encap_type == "gre":
+        gre: Dict[str, Any] = {
+            "teb_mode": bool(a.gre_teb_mode),
+            "key_present": a.gre_key is not None,
+            "gre_key": int(a.gre_key or 0),
+            "seq_present": a.gre_seq_start is not None,
+            "seq_start": int(a.gre_seq_start or 0),
+            "csum_present": bool(a.gre_csum),
+        }
+        payload["gre"] = gre
+
+    elif encap_type == "qinq":
+        if a.s_vlan_id is None or a.c_vlan_id is None:
+            raise ValueError("--s-vlan-id and --c-vlan-id are required for qinq")
+        payload["qinq"] = {
+            "mode": a.qinq_mode,
+            "s_vlan_id": int(a.s_vlan_id),
+            "s_pcp": int(a.s_pcp),
+            "s_dei": int(a.s_dei),
+            "c_vlan_id": int(a.c_vlan_id),
+            "c_pcp": int(a.c_pcp),
+            "c_dei": int(a.c_dei),
+            "preserve_existing_vlan": bool(a.preserve_existing_vlan),
+        }
+
+    elif encap_type == "erspan":
+        if a.session_id is None:
+            raise ValueError("--session-id is required for erspan")
+        payload["erspan"] = {
+            "type": a.erspan_type,
+            "session_id": int(a.session_id),
+            "sequence_present": a.erspan_seq_start is not None,
+            "seq_start": int(a.erspan_seq_start or 0),
+        }
+
+    elif encap_type == "none":
+        # allow explicit disable
+        payload["enabled"] = False
+
+    else:
+        raise ValueError(f"Unknown encap type: {encap_type}")
+
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -431,32 +554,11 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- assign ----
     p_asg = sp.add_parser("assign", help="Assign a loaded pcap slot to a port for replay")
     p_asg.add_argument("--portname", required=True, help="Port name")
-
     p_asg.add_argument("--slotid", required=True, type=int, help="Loaded pcap slot id")
-
-    # allow either numeric or string mode
-    p_asg.add_argument(
-        "--pace-mode",
-        default="0",
-        help="pace_mode (int or name). Examples: 0, 1, realtime, pps",
-    )
-    p_asg.add_argument(
-        "--start-mode",
-        default="0",
-        help="start_mode (int or name). Examples: 0, 1, immediate, armed",
-    )
-    p_asg.add_argument(
-        "--fixed-index",
-        type=int,
-        default=0,
-        help="fixed_index (int). Use for deterministic selection if supported.",
-    )
-    p_asg.add_argument(
-        "--replay-window-sec",
-        type=float,
-        default=0,
-        help="replay_window_sec (float). 0 typically means 'no window' if supported.",
-    )
+    p_asg.add_argument("--pace-mode", default="0", help="pace_mode (int or name). Examples: 0, 1, realtime, pps")
+    p_asg.add_argument("--start-mode", default="0", help="start_mode (int or name). Examples: 0, 1, immediate, armed")
+    p_asg.add_argument("--fixed-index", type=int, default=0, help="fixed_index (int).")
+    p_asg.add_argument("--replay-window-sec", type=float, default=0, help="replay_window_sec (float).")
 
     # ---- vcs ----
     p_vcs = sp.add_parser("vcs", help="Set number of active virtual clients (VCs) for a port stream")
@@ -466,19 +568,95 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- target rate ----
     p_rate = sp.add_parser("rate", help="Set target rate for a port stream (bps or pps)")
     p_rate.add_argument("--portname", required=True, help="Port name")
-    p_rate.add_argument(
-        "--kind",
-        required=True,
-        choices=["bps", "pps"],
-        help="Target kind",
-    )
-    p_rate.add_argument(
-        "--value",
-        required=True,
-        type=float,
-        help="Target value (float)",
-    )
+    p_rate.add_argument("--kind", required=True, choices=["bps", "pps"], help="Target kind")
+    p_rate.add_argument("--value", required=True, type=float, help="Target value (float)")
 
+    # ---- encap get/clear/set ----
+    p_enc_get = sp.add_parser("encap-get", help="Get tx encapsulation config for a port stream")
+    p_enc_get.add_argument("--port-index", type=int, default=None, help="Port index (preferred)")
+    p_enc_get.add_argument("--portname", default=None, help="Port name (e.g., port0) used to derive index")
+
+    p_enc_clear = sp.add_parser("encap-clear", help="Clear/disable tx encapsulation for a port stream")
+    p_enc_clear.add_argument("--port-index", type=int, default=None, help="Port index (preferred)")
+    p_enc_clear.add_argument("--portname", default=None, help="Port name (e.g., port0) used to derive index")
+
+    p_enc_set = sp.add_parser("encap-set", help="Configure tx encapsulation for a port stream")
+    p_enc_set.add_argument("--port-index", type=int, default=None, help="Port index (preferred)")
+    p_enc_set.add_argument("--portname", default=None, help="Port name (e.g., port0) used to derive index")
+
+    p_enc_set.add_argument("--type", required=True, choices=["none", "vxlan", "gre", "qinq", "erspan"], help="Encap type")
+    p_enc_set.add_argument("--disable", action="store_true", help="Disable encapsulation (equivalent to type=none)")
+
+    p_enc_set.add_argument("--mode", default="try_prepend",
+                           choices=["try_prepend", "force_prepend", "force_chain"],
+                           help="Encap apply mode")
+    p_enc_set.add_argument("--oversize-policy", default="drop",
+                           choices=["drop", "allow", "fragment"],
+                           help="Oversize behavior relative to MTU")
+    p_enc_set.add_argument("--outer-csum-hw-offload", action="store_true",
+                           help="Request outer checksum HW offload (if implemented in datapath)")
+
+    p_enc_set.add_argument("--max-inner-l2-len", type=int, default=None,
+                           help="Optional: max inner L2 len for validation (bytes)")
+
+    # Outer header args (required for vxlan/gre/erspan)
+    p_enc_set.add_argument("--outer-src-mac", default=None, help="Outer src MAC aa:bb:cc:dd:ee:ff")
+    p_enc_set.add_argument("--outer-dst-mac", default=None, help="Outer dst MAC aa:bb:cc:dd:ee:ff")
+    p_enc_set.add_argument("--outer-src-ip", default=None, help="Outer src IPv4 (VTEP) e.g. 10.0.0.1")
+    p_enc_set.add_argument("--outer-dst-ip", default=None, help="Outer dst IPv4 (VTEP) e.g. 10.0.0.2")
+    p_enc_set.add_argument("--outer-ttl", type=int, default=64, help="Outer IPv4 TTL")
+    p_enc_set.add_argument("--outer-dscp", type=int, default=0, help="Outer IPv4 DSCP (0..63)")
+    p_enc_set.add_argument("--outer-df", action="store_true", default=True, help="Set DF bit on outer IPv4")
+    p_enc_set.add_argument("--outer-no-df", dest="outer_df", action="store_false", help="Clear DF bit on outer IPv4")
+
+    # Optional underlay VLAN (outer L2 tags)
+    p_enc_set.add_argument("--outer-vlan-mode", default="none", choices=["none", "8021q", "qinq"],
+                           help="Underlay VLAN tags on outer Ethernet header")
+    p_enc_set.add_argument("--outer-vlan-id", type=int, default=None, help="Underlay 802.1Q VLAN ID")
+    p_enc_set.add_argument("--outer-vlan-pcp", type=int, default=0, help="Underlay 802.1Q PCP (0..7)")
+    p_enc_set.add_argument("--outer-vlan-dei", type=int, default=0, help="Underlay 802.1Q DEI (0..1)")
+
+    p_enc_set.add_argument("--outer-s-vlan-id", type=int, default=None, help="Underlay QinQ S-VLAN ID")
+    p_enc_set.add_argument("--outer-s-vlan-pcp", type=int, default=0, help="Underlay QinQ S-PCP")
+    p_enc_set.add_argument("--outer-s-vlan-dei", type=int, default=0, help="Underlay QinQ S-DEI")
+    p_enc_set.add_argument("--outer-c-vlan-id", type=int, default=None, help="Underlay QinQ C-VLAN ID")
+    p_enc_set.add_argument("--outer-c-vlan-pcp", type=int, default=0, help="Underlay QinQ C-PCP")
+    p_enc_set.add_argument("--outer-c-vlan-dei", type=int, default=0, help="Underlay QinQ C-DEI")
+
+    # VXLAN
+    p_enc_set.add_argument("--vni", type=int, default=None, help="VXLAN VNI (0..16777215)")
+    p_enc_set.add_argument("--udp-dst-port", type=int, default=4789, help="VXLAN UDP dst port (default 4789)")
+    p_enc_set.add_argument("--udp-srcport-mode", default="fixed",
+                           choices=["fixed", "hash_inner_l2", "hash_inner_5tuple"],
+                           help="VXLAN UDP src port derivation")
+    p_enc_set.add_argument("--udp-src-port", type=int, default=5555, help="VXLAN UDP src port (fixed mode)")
+    p_enc_set.add_argument("--udp-checksum", action="store_true", help="Enable VXLAN UDP checksum (if supported)")
+
+    # GRE
+    p_enc_set.add_argument("--gre-teb-mode", action="store_true", default=True,
+                           help="GRE TEB mode (Ethernet-over-GRE). Default true.")
+    p_enc_set.add_argument("--gre-ip-mode", dest="gre_teb_mode", action="store_false",
+                           help="GRE IP payload mode (IP-over-GRE).")
+    p_enc_set.add_argument("--gre-key", type=int, default=None, help="GRE key (enables key_present)")
+    p_enc_set.add_argument("--gre-seq-start", type=int, default=None, help="GRE sequence start (enables seq_present)")
+    p_enc_set.add_argument("--gre-csum", action="store_true", help="Enable GRE checksum present flag")
+
+    # QinQ
+    p_enc_set.add_argument("--qinq-mode", default="push", choices=["push", "replace", "push_if_untagged"],
+                           help="QinQ insertion mode")
+    p_enc_set.add_argument("--s-vlan-id", type=int, default=None, help="QinQ S-VLAN ID (outer tag)")
+    p_enc_set.add_argument("--s-pcp", type=int, default=0, help="QinQ S-PCP (0..7)")
+    p_enc_set.add_argument("--s-dei", type=int, default=0, help="QinQ S-DEI (0..1)")
+    p_enc_set.add_argument("--c-vlan-id", type=int, default=None, help="QinQ C-VLAN ID (inner tag)")
+    p_enc_set.add_argument("--c-pcp", type=int, default=0, help="QinQ C-PCP (0..7)")
+    p_enc_set.add_argument("--c-dei", type=int, default=0, help="QinQ C-DEI (0..1)")
+    p_enc_set.add_argument("--preserve-existing-vlan", action="store_true",
+                           help="If packet already VLAN-tagged, preserve existing VLAN stack (if supported)")
+
+    # ERSPAN
+    p_enc_set.add_argument("--erspan-type", default="II", choices=["II", "III"], help="ERSPAN header type")
+    p_enc_set.add_argument("--session-id", type=int, default=None, help="ERSPAN session/span id")
+    p_enc_set.add_argument("--erspan-seq-start", type=int, default=None, help="ERSPAN GRE seq start (enables sequence_present)")
 
     return p
 
@@ -487,7 +665,7 @@ def main() -> int:
     args = build_parser().parse_args()
 
     ctl = WpsControlClient(port=args.port, hostip=args.hostip)
-    traffic = PprTrafficClient(ctl)
+    traffic = WprTrafficClient(ctl)
 
     try:
         if args.command == "ports":
@@ -507,7 +685,6 @@ def main() -> int:
 
         if args.command == "load":
             reply = traffic.load_pcap_file(args.filename)
-            # Often returns assigned slot id; print both pretty and a short line.
             display_generic_reply("Load PCAP Reply", reply)
             if "slotid" in reply:
                 print(f"Loaded '{args.filename}' into slotid={reply['slotid']}")
@@ -518,7 +695,6 @@ def main() -> int:
         if args.command == "assign":
             pace_mode = _resolve_pace_mode(args.pace_mode)
             start_mode = _resolve_start_mode(args.start_mode)
-
             reply = traffic.assign_port_slot(
                 port=args.portname,
                 slotid=args.slotid,
@@ -534,12 +710,30 @@ def main() -> int:
             reply = traffic.set_port_stream_vcs(args.portname, args.num_vcs)
             display_generic_reply("Set Port Stream VCs Reply", reply)
             return 0
-            
+
         if args.command == "rate":
             reply = traffic.set_target_rate(args.portname, args.kind, args.value)
             display_generic_reply("Set Target Rate Reply", reply)
             return 0
 
+        if args.command == "encap-get":
+            port_index = _pick_port_index(args.port_index, args.portname)
+            reply = traffic.tx_encap_get(port_index)
+            display_encap_reply("Encap Get Reply", reply)
+            return 0
+
+        if args.command == "encap-clear":
+            port_index = _pick_port_index(args.port_index, args.portname)
+            reply = traffic.tx_encap_clear(port_index)
+            display_encap_reply("Encap Clear Reply", reply)
+            return 0
+
+        if args.command == "encap-set":
+            port_index = _pick_port_index(args.port_index, args.portname)
+            payload = build_encap_payload_from_cli(args)
+            reply = traffic.tx_encap_set(port_index, payload)
+            display_encap_reply("Encap Set Reply", reply)
+            return 0
 
         raise RuntimeError(f"Unknown command: {args.command}")
 
