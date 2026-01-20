@@ -74,6 +74,7 @@ typedef struct __attribute__((aligned(CACHE_LINE))) wpr_vc_ctx {
     uint32_t pcap_idx;            // current index
     uint64_t start_offset_ns;     // chosen at init, in [0, period_ns)
     uint64_t base_rel_ns;         // template_rel_ns at start_idx
+    uint64_t cycle_start_ns;      // ABS time when this VC’s current replay cycle begins
     uint64_t epoch;               // current replay epoch observed
     uint64_t flow_epoch;          // increments each epoch for tuple uniqueness
     uint32_t emit_budget;     // for non pacing modes (VC_PACE_NONE) how many packets to tx before yielding to next vc
@@ -365,42 +366,28 @@ static inline void wpr_vc_init_start_params(wpr_vc_ctx_t *vc,
     if (gcfg->pace_mode == VC_PACE_PCAP_TS && gcfg->replay_window_ns > 0) {
         const uint64_t window = gcfg->replay_window_ns;
 
-        /*
-         * To guarantee "full pcap fits in the window" for each VC, we must
-         * restrict the offset to [0, window - pcap_span].
-         */
         uint64_t first = wpr_slot_pkt_rel_ns(slot, 0, mbuf_ts_off);
-        uint64_t last  = wpr_slot_pkt_rel_ns(slot, n - 1, mbuf_ts_off);
         if (first == UINT64_MAX) first = 0;
-        if (last  == UINT64_MAX) last  = first;
 
-        uint64_t span = (last >= first) ? (last - first) : 0;
+        /* Even distribution across [0, window) with small jitter */
+        uint64_t phase = (vc_count ? (window * (uint64_t)vc_local_idx) / (uint64_t)vc_count : 0);
 
-        /* If span >= window, no offset can fit the whole capture; clamp to 0. */
-        uint64_t max_off = (window > span) ? (window - span) : 0;
-
-        /*
-         * Evenly distribute offsets across [0, max_off] with small jitter.
-         * NOTE: if max_off == 0, all VCs necessarily align at offset 0.
-         */
-        uint64_t phase = (vc_count ? (max_off * (uint64_t)vc_local_idx) / (uint64_t)vc_count : 0);
-
-        uint64_t jitter_max = (max_off / 100);          /* 1% of allowed offset range */
+        uint64_t jitter_max = window / 1000;   /* 0.1% window jitter (tune) */
         uint64_t jitter = (jitter_max ? (r % jitter_max) : 0);
 
-        start_offset_ns = (max_off ? ((phase + jitter) % (max_off + 1)) : 0);
+        start_offset_ns = (phase + jitter) % window;
 
-        /*
-         * IMPORTANT: for paced replay + randomized offset, keep start_idx at the
-         * start of the capture so every VC replays the full pcap timeline and
-         * the offset alone determines placement in the window.
-         */
+        /* For paced replay, start from beginning of capture timeline */
         start_idx = 0;
 
-        vc->start_idx = start_idx;
-        vc->pcap_idx = start_idx;
-        vc->start_offset_ns = start_offset_ns;
-        vc->base_rel_ns = first;   /* base relative time = first packet ts */
+        vc->start_idx        = start_idx;
+        vc->pcap_idx         = start_idx;
+        vc->start_offset_ns  = start_offset_ns;
+        vc->base_rel_ns      = first;
+
+        /* ABS cycle start: global start + offset */
+        uint64_t gstart = atomic_load_explicit(&gcfg->global_start_ns, memory_order_acquire);
+        vc->cycle_start_ns = gstart + start_offset_ns;
 
         return;
     }

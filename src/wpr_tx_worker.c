@@ -287,7 +287,7 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
                struct rte_mempool *tx_pool,
                wpr_port_stream_ctx_t *psc,
                wpr_vc_ctx_t *vc,
-               uint64_t phase,
+               uint64_t now_ns, 
                uint16_t dpdk_port_id) 
 {
     uint16_t nb = 0;
@@ -312,14 +312,13 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
             uint64_t rel_ts = my_ts_get(tmpl, mbuf_ts_off);
             if (rel_ts < vc->base_rel_ns) { vc->pcap_idx++; continue; }
 
-            uint64_t due = vc->start_offset_ns + (rel_ts - vc->base_rel_ns);
-            if (due > psc->global_cfg->replay_window_ns) {
-                /* This packet would land beyond the window; end this VC for this epoch */
-                break;
-            }
-            if (due > phase) break;
+            uint64_t due_abs = vc->cycle_start_ns + (rel_ts - vc->base_rel_ns);
 
+            /* Not due yet */
+            if (due_abs > now_ns)
+                break;
         }
+
 
         // create a packet copy since we may need to modify it 
         struct rte_mbuf *c = wpr_copy_with_priv(tmpl, tx_pool);
@@ -343,6 +342,26 @@ static inline uint16_t build_tx_burst(struct rte_mbuf **tx_pkts,
 
         tx_pkts[nb++] = out;
         vc->pcap_idx++;
+    }
+
+    if (psc->global_cfg->pace_mode == VC_PACE_PCAP_TS) {
+        pcap_mbuff_slot_t *slot = atomic_load_explicit(&pcap_storage->slots[slot_id], memory_order_acquire);
+        if (slot && vc->pcap_idx >= slot->numpackets) {
+
+            vc->pcap_idx = vc->start_idx;
+            vc->flow_epoch++;
+
+            uint64_t w = psc->global_cfg->replay_window_ns;
+
+            /* Advance cycle start by exactly one window */
+            vc->cycle_start_ns += w;
+
+            /* If we're *really* behind, skip whole windows so due_abs won't stay perpetually in the past */
+            if (now_ns > vc->cycle_start_ns + w) {
+                uint64_t skip = (now_ns - vc->cycle_start_ns) / w;
+                vc->cycle_start_ns += skip * w;
+            }
+        }
     }
     return nb;
 }
@@ -425,10 +444,6 @@ int run_tx_worker(__rte_unused void *arg) {
                 port_stream_ctx->last_run_gen = run_gen;
             }
 
-            uint64_t elapsed    = now_ns - atomic_load_explicit(&g->global_start_ns, memory_order_acquire);
-            uint64_t epoch      = 0;
-            uint64_t phase      = 0;
-
             //figure out our epoch and phase for this stream context
             if (g->pace_mode == VC_PACE_PCAP_TS) {
                 uint64_t w = g->replay_window_ns;
@@ -436,10 +451,6 @@ int run_tx_worker(__rte_unused void *arg) {
                     WPR_LOG(WPR_LOG_DP, RTE_LOG_ERR, "Replay window ns is 0 for port index %u\n", port_idx);
                     continue;
                 }
-                
-                epoch = elapsed / g->replay_window_ns;
-                phase = elapsed % g->replay_window_ns;
-
             }
             
             //process any changes to the encap config
@@ -531,16 +542,10 @@ int run_tx_worker(__rte_unused void *arg) {
                 uint32_t vc_idx = (start + k) % nclients;
                 wpr_vc_ctx_t *vc = &port_stream_ctx->clients[vc_idx];
 
-                if (vc->epoch != epoch && g->pace_mode == VC_PACE_PCAP_TS) {
-                    vc->epoch = epoch;
-                    vc->pcap_idx = vc->start_idx;
-                    vc->flow_epoch++; 
-                }
-
                 uint16_t nb = build_tx_burst(tx_pkts, BURST_SIZE_MAX, thread_args->pcap_storage,
                                             slot_id,
                                             mbuf_ts_off, tx_pool,
-                                            port_stream_ctx, vc, phase, dpdk_port_id);
+                                            port_stream_ctx, vc, now_ns, dpdk_port_id);
 
                 if (nb) {
                     uint16_t sent = rte_eth_tx_burst(dpdk_port_id, tx_queue_id, tx_pkts, nb);
@@ -548,6 +553,8 @@ int run_tx_worker(__rte_unused void *arg) {
                         rte_pktmbuf_free(tx_pkts[i]);
                 }
             }
+
+
 
             port_stream_ctx->rr_next_client = (start + budget_clients) % nclients;
 
